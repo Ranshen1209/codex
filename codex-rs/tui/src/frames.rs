@@ -57,8 +57,6 @@ pub(crate) const FRAMES_SLUG: [&str; 36] = frames_for!("slug");
 
 pub(crate) const ALL_VARIANTS: &[&[&str]] = &[
     &FRAMES_DEFAULT,
-    &FRAMES_CODEX,
-    &FRAMES_OPENAI,
     &FRAMES_BLOCKS,
     &FRAMES_DOTS,
     &FRAMES_HASH,
