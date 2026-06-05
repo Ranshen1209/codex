@@ -316,24 +316,22 @@ impl App {
                 let exe = std::env::current_exe()
                     .unwrap_or_else(|_| "sakrylle".into());
 
-                // Spawn login process
+                // Run login synchronously (blocking)
                 match std::process::Command::new(&exe)
                     .arg("login")
-                    .spawn()
+                    .status()
                 {
-                    Ok(mut child) => {
+                    Ok(status) if status.success() => {
                         self.chat_widget.add_info_message(
-                            "Browser opened for authentication. Complete login in browser, then return here."
+                            "Login successful! Please restart Sakrylle CLI to use the new credentials."
                                 .to_string(),
                             None,
                         );
-                        // Wait for login to complete in background
-                        let tx = self.app_event_tx.clone();
-                        tokio::spawn(async move {
-                            let _ = child.wait();
-                            // Notify that login attempt finished
-                            tx.send(AppEvent::LoginCompleted);
-                        });
+                    }
+                    Ok(status) => {
+                        self.chat_widget.add_error_message(
+                            format!("Login failed with status: {status}")
+                        );
                     }
                     Err(e) => {
                         self.chat_widget.add_error_message(
@@ -341,12 +339,6 @@ impl App {
                         );
                     }
                 }
-            }
-            AppEvent::LoginCompleted => {
-                self.chat_widget.add_info_message(
-                    "Login process finished. Use /status to check authentication.".to_string(),
-                    None,
-                );
             }
             AppEvent::Logout => match app_server.logout_account().await {
                 Ok(()) => {

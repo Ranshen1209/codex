@@ -1433,27 +1433,40 @@ async fn run_ratatui_app(
                         .is_some();
 
                 if !has_oauth_token {
-                    // No credentials found, auto-trigger login
-                    eprintln!("No Sakrylle credentials found. Opening browser for login...");
+                    // Show login prompt
+                    eprintln!();
+                    eprintln!("  Welcome to Sakrylle CLI");
+                    eprintln!();
+                    eprintln!("  No credentials found. Would you like to login?");
+                    eprintln!();
+                    eprintln!("  [Y] Yes, open browser to login");
+                    eprintln!("  [N] No, continue without login");
+                    eprintln!();
 
-                    let exe = std::env::current_exe()
-                        .unwrap_or_else(|_| "sakrylle".into());
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input).ok();
 
-                    match std::process::Command::new(&exe)
-                        .arg("login")
-                        .status()
-                    {
-                        Ok(status) if status.success() => {
-                            eprintln!("Login successful! Restarting...");
-                            // Exit and let user restart to pick up new credentials
-                            std::process::exit(0);
+                    if input.trim().to_lowercase() == "y" || input.trim().is_empty() {
+                        let exe = std::env::current_exe()
+                            .unwrap_or_else(|_| "sakrylle".into());
+
+                        match std::process::Command::new(&exe)
+                            .arg("login")
+                            .status()
+                        {
+                            Ok(status) if status.success() => {
+                                eprintln!("Login successful! Restarting...");
+                                std::process::exit(0);
+                            }
+                            Ok(status) => {
+                                eprintln!("Login failed with status: {status}");
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to start login: {e}");
+                            }
                         }
-                        Ok(status) => {
-                            eprintln!("Login failed with status: {status}");
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to start login: {e}");
-                        }
+                    } else {
+                        eprintln!("Continuing without login. Use /login to login later.");
                     }
                 }
             }

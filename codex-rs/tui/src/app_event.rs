@@ -226,9 +226,6 @@ pub(crate) enum AppEvent {
     /// Request app-server account login (OIDC flow).
     Login,
 
-    /// Login process completed.
-    LoginCompleted,
-
     /// Request app-server account logout, then exit after it succeeds.
     Logout,
 
