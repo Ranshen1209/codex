@@ -1405,6 +1405,59 @@ async fn run_ratatui_app(
         };
         get_login_status(app_server, &initial_config).await?
     } else {
+        // SAKRYLLE: Auto-trigger OIDC login if no API key and no OAuth token
+        if !initial_config.model_provider.requires_openai_auth
+            && initial_config.model_provider.env_key.is_some()
+        {
+            let env_key = initial_config.model_provider.env_key.as_ref().unwrap();
+            let has_api_key = std::env::var(env_key)
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .is_some();
+
+            if !has_api_key {
+                // Check if we have an OAuth token in auth.json
+                let codex_home = codex_utils_home_dir::find_codex_home()
+                    .unwrap_or_else(|_| {
+                        let mut p = dirs::home_dir().unwrap_or_default();
+                        p.push(".sakrylle-cli");
+                        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(p)
+                            .unwrap()
+                    });
+                let auth_file = codex_home.join("auth.json");
+                let has_oauth_token = auth_file.exists()
+                    && std::fs::read_to_string(&auth_file)
+                        .ok()
+                        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                        .and_then(|v| v.get("tokens").cloned())
+                        .is_some();
+
+                if !has_oauth_token {
+                    // No credentials found, auto-trigger login
+                    eprintln!("No Sakrylle credentials found. Opening browser for login...");
+
+                    let exe = std::env::current_exe()
+                        .unwrap_or_else(|_| "sakrylle".into());
+
+                    match std::process::Command::new(&exe)
+                        .arg("login")
+                        .status()
+                    {
+                        Ok(status) if status.success() => {
+                            eprintln!("Login successful! Restarting...");
+                            // Exit and let user restart to pick up new credentials
+                            std::process::exit(0);
+                        }
+                        Ok(status) => {
+                            eprintln!("Login failed with status: {status}");
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to start login: {e}");
+                        }
+                    }
+                }
+            }
+        }
         LoginStatus::NotAuthenticated
     };
     let should_show_onboarding =
