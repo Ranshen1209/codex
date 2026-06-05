@@ -29,7 +29,6 @@ use crate::auth::load_auth_dot_json;
 use crate::auth::revoke_auth_tokens;
 use crate::auth::save_auth;
 use crate::auth::should_revoke_auth_tokens;
-use crate::default_client::originator;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use crate::token_data::TokenData;
@@ -41,6 +40,7 @@ use codex_client::build_reqwest_client_with_custom_ca;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_template::Template;
 use rand::RngCore;
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use tiny_http::Header;
 use tiny_http::Request;
@@ -51,12 +51,87 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-const DEFAULT_ISSUER: &str = "https://auth.openai.com";
-const DEFAULT_PORT: u16 = 1455;
-// Keep in sync with the Codex CLI Hydra redirect URI allow-list.
-const FALLBACK_PORT: u16 = 1457;
+// SAKRYLLE: OIDC login — changed issuer and port strategy
+const DEFAULT_ISSUER: &str = "https://sub.sakrylle.com";
+const SAKRYLLE_OIDC_ISSUER_ENV: &str = "SAKRYLLE_OIDC_ISSUER";
+const LOGIN_TIMEOUT_SECS: u64 = 300;
+const SAKRYLLE_CLIENT_ID: &str = "sakrylle-cli";
+pub(crate) const SAKRYLLE_SCOPE: &str =
+    "openid profile email models:read responses:create messages:create usage:read offline_access";
+// SAKRYLLE: OIDC login — removed DEFAULT_PORT/FALLBACK_PORT in favour of random port (127.0.0.1:0)
+
+/// SAKRYLLE: OIDC login — OpenID Connect discovery document.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OidcDiscovery {
+    pub issuer: String,
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
+    #[serde(default)]
+    pub userinfo_endpoint: Option<String>,
+    pub jwks_uri: String,
+    #[serde(default)]
+    pub device_authorization_endpoint: Option<String>,
+    #[serde(default)]
+    pub end_session_endpoint: Option<String>,
+    #[serde(default)]
+    pub code_challenge_methods_supported: Option<Vec<String>>,
+    #[serde(default)]
+    pub id_token_signing_alg_values_supported: Option<Vec<String>>,
+}
+
+/// SAKRYLLE: OIDC login — JWKS key set for id_token verification.
+#[derive(Debug, Clone, Deserialize)]
+struct Jwks {
+    keys: Vec<Jwk>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Jwk {
+    kid: String,
+    kty: String,
+    #[serde(default)]
+    alg: Option<String>,
+    #[serde(default)]
+    r#use: Option<String>,
+    // RSA
+    #[serde(default)]
+    n: Option<String>,
+    #[serde(default)]
+    e: Option<String>,
+    // EC
+    #[serde(default)]
+    crv: Option<String>,
+    #[serde(default)]
+    x: Option<String>,
+    #[serde(default)]
+    y: Option<String>,
+}
+
+/// SAKRYLLE: OIDC login — fetch the OpenID Connect discovery document.
+pub async fn fetch_discovery(issuer: &str) -> io::Result<OidcDiscovery> {
+    let issuer = issuer.trim_end_matches('/');
+    let url = format!("{issuer}/.well-known/openid-configuration");
+    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
+    let resp = client.get(&url).send().await.map_err(io::Error::other)?;
+    if !resp.status().is_success() {
+        return Err(io::Error::other(format!(
+            "OIDC discovery failed with status {}",
+            resp.status()
+        )));
+    }
+    resp.json::<OidcDiscovery>()
+        .await
+        .map_err(|e| io::Error::other(format!("failed to parse OIDC discovery: {e}")))
+}
+
+/// SAKRYLLE: OIDC login — resolve the issuer from env or default.
+pub fn resolve_issuer() -> String {
+    std::env::var(SAKRYLLE_OIDC_ISSUER_ENV).unwrap_or_else(|_| DEFAULT_ISSUER.to_string())
+}
+
+/// SAKRYLLE: OIDC login — use Sakrylle-branded error page
 static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(include_str!("assets/error.html"))
+    Template::parse(include_str!("assets/sakrylle_error.html"))
         .unwrap_or_else(|err| panic!("login error page template must parse: {err}"))
 });
 
@@ -75,7 +150,7 @@ pub struct ServerOptions {
 }
 
 impl ServerOptions {
-    /// Creates a server configuration with the default issuer and port.
+    /// SAKRYLLE: OIDC login — creates a server configuration with the Sakrylle issuer and random port.
     pub fn new(
         codex_home: PathBuf,
         client_id: String,
@@ -85,14 +160,30 @@ impl ServerOptions {
         Self {
             codex_home,
             client_id,
-            issuer: DEFAULT_ISSUER.to_string(),
-            port: DEFAULT_PORT,
+            // SAKRYLLE: OIDC login — issuer from env or default
+            issuer: resolve_issuer(),
+            // SAKRYLLE: OIDC login — port 0 means OS assigns a random free port
+            port: 0,
             open_browser: true,
             force_state: None,
             forced_chatgpt_workspace_id,
             codex_streamlined_login: false,
             cli_auth_credentials_store_mode,
         }
+    }
+
+    /// SAKRYLLE: OIDC login — creates a server configuration with the Sakrylle client_id and scope.
+    pub fn new_sakrylle(
+        codex_home: PathBuf,
+        forced_chatgpt_workspace_id: Option<Vec<String>>,
+        cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    ) -> Self {
+        Self::new(
+            codex_home,
+            SAKRYLLE_CLIENT_ID.to_string(),
+            forced_chatgpt_workspace_id,
+            cli_auth_credentials_store_mode,
+        )
     }
 }
 
@@ -136,12 +227,19 @@ impl ShutdownHandle {
     }
 }
 
-/// Starts a local callback server and returns the browser auth URL.
-pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
+/// SAKRYLLE: OIDC login — starts a local callback server and returns the browser auth URL.
+/// Uses OIDC discovery to obtain the authorization endpoint.
+pub async fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
+    let issuer = &opts.issuer;
+    // SAKRYLLE: OIDC login — fetch discovery document for endpoint URLs
+    let discovery = fetch_discovery(issuer).await?;
+    let auth_endpoint = &discovery.authorization_endpoint;
+
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
-    let server = bind_server(opts.port)?;
+    // SAKRYLLE: OIDC login — bind to 127.0.0.1:0 for a random free port
+    let server = bind_server(0)?;
     let actual_port = match server.server_addr().to_ip() {
         Some(addr) => addr.port(),
         None => {
@@ -153,18 +251,19 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     };
     let server = Arc::new(server);
 
-    let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
+    // SAKRYLLE: OIDC login — use /callback path per sub2api
+    let redirect_uri = format!("http://127.0.0.1:{actual_port}/callback");
     let auth_url = build_authorize_url(
-        &opts.issuer,
+        auth_endpoint,
         &opts.client_id,
         &redirect_uri,
         &pkce,
         &state,
-        opts.forced_chatgpt_workspace_id.as_deref(),
     );
 
+    // SAKRYLLE: OIDC login — cross-platform browser open with URL fallback
     if opts.open_browser {
-        let _ = webbrowser::open(&auth_url);
+        open_browser_with_fallback(&auth_url);
     }
 
     // Map blocking reads from server.recv() to an async channel.
@@ -189,9 +288,24 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let server_handle = {
         let shutdown_notify = shutdown_notify.clone();
         let server = server;
+        let discovery = discovery.clone();
+        let opts = opts.clone();
+        let redirect_uri = redirect_uri.clone();
+        let pkce = pkce.clone();
+        let state = state.clone();
         tokio::spawn(async move {
+            // SAKRYLLE: OIDC login — 300-second login timeout
+            let timeout = tokio::time::sleep(Duration::from_secs(LOGIN_TIMEOUT_SECS));
+            tokio::pin!(timeout);
+
             let result = loop {
                 tokio::select! {
+                    _ = &mut timeout => {
+                        break Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("Login timed out after {LOGIN_TIMEOUT_SECS} seconds"),
+                        ));
+                    }
                     _ = shutdown_notify.notified() => {
                         break Err(io::Error::other("Login was not completed"));
                     }
@@ -202,7 +316,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
 
                         let url_raw = req.url().to_string();
                         let response =
-                            process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await;
+                            process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state, &discovery).await;
 
                         let exit_result = match response {
                             HandledRequest::Response(response) => {
@@ -267,6 +381,7 @@ async fn process_request(
     pkce: &PkceCodes,
     actual_port: u16,
     state: &str,
+    discovery: &OidcDiscovery,
 ) -> HandledRequest {
     let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
         Ok(u) => u,
@@ -280,7 +395,8 @@ async fn process_request(
     let path = parsed_url.path().to_string();
 
     match path.as_str() {
-        "/auth/callback" => {
+        // SAKRYLLE: OIDC login — accept both /callback (sub2api) and /auth/callback (legacy)
+        "/callback" | "/auth/callback" => {
             let params: std::collections::HashMap<String, String> =
                 parsed_url.query_pairs().into_owned().collect();
             let has_code = params.get("code").is_some_and(|code| !code.is_empty());
@@ -335,7 +451,8 @@ async fn process_request(
                 }
             };
 
-            match exchange_code_for_tokens(&opts.issuer, &opts.client_id, redirect_uri, pkce, &code)
+            // SAKRYLLE: OIDC login — use discovery token_endpoint
+            match exchange_code_for_tokens(&discovery.token_endpoint, &opts.client_id, redirect_uri, pkce, &code)
                 .await
             {
                 Ok(tokens) => {
@@ -351,13 +468,10 @@ async fn process_request(
                             /*error_description*/ None,
                         );
                     }
-                    // Obtain API key via token-exchange and persist
-                    let api_key = obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
-                        .await
-                        .ok();
+                    // SAKRYLLE: OIDC login — persist tokens (no API key exchange needed)
                     if let Err(err) = persist_tokens_async(
                         &opts.codex_home,
-                        api_key.clone(),
+                        /*api_key*/ None,
                         tokens.id_token.clone(),
                         tokens.access_token.clone(),
                         tokens.refresh_token.clone(),
@@ -374,17 +488,12 @@ async fn process_request(
                         );
                     }
 
-                    let success_url = compose_success_url(
-                        actual_port,
-                        &opts.issuer,
-                        &tokens.id_token,
-                        &tokens.access_token,
-                        opts.codex_streamlined_login,
-                    );
+                    // SAKRYLLE: OIDC login — redirect to local success page
+                    let success_url = format!("http://127.0.0.1:{actual_port}/success");
                     match tiny_http::Header::from_bytes(&b"Location"[..], success_url.as_bytes()) {
                         Ok(header) => HandledRequest::RedirectWithHeader(header),
                         Err(_) => login_error_response(
-                            "Sign-in completed but redirecting back to Codex failed.",
+                            "Sign-in completed but redirecting back to the app failed.",
                             io::ErrorKind::Other,
                             Some("redirect_failed"),
                             /*error_description*/ None,
@@ -404,14 +513,8 @@ async fn process_request(
             }
         }
         "/success" => {
-            let use_streamlined_success = parsed_url
-                .query_pairs()
-                .any(|(key, value)| key == "codex_streamlined_login" && value == "true");
-            let body = if use_streamlined_success {
-                include_str!("assets/success.html")
-            } else {
-                include_str!("assets/success_legacy.html")
-            };
+            // SAKRYLLE: OIDC login — Sakrylle-branded success page
+            let body = include_str!("assets/sakrylle_success.html");
             HandledRequest::ResponseAndExit {
                 headers: match Header::from_bytes(
                     &b"Content-Type"[..],
@@ -480,42 +583,70 @@ fn send_response_with_disconnect(
     writer.flush()
 }
 
+/// SAKRYLLE: OIDC login — build the authorization URL using the discovery authorization_endpoint.
 fn build_authorize_url(
-    issuer: &str,
+    authorization_endpoint: &str,
     client_id: &str,
     redirect_uri: &str,
     pkce: &PkceCodes,
     state: &str,
-    forced_chatgpt_workspace_ids: Option<&[String]>,
 ) -> String {
-    let mut query = vec![
+    // SAKRYLLE: OIDC login — aud as single-element array for sub2api
+    let aud_json = serde_json::to_string(&[client_id]).unwrap_or_else(|_| format!("[\"{client_id}\"]"));
+    let query = vec![
         ("response_type".to_string(), "code".to_string()),
         ("client_id".to_string(), client_id.to_string()),
         ("redirect_uri".to_string(), redirect_uri.to_string()),
-        (
-            "scope".to_string(),
-            "openid profile email offline_access api.connectors.read api.connectors.invoke"
-                .to_string(),
-        ),
+        ("scope".to_string(), SAKRYLLE_SCOPE.to_string()),
         (
             "code_challenge".to_string(),
             pkce.code_challenge.to_string(),
         ),
         ("code_challenge_method".to_string(), "S256".to_string()),
-        ("id_token_add_organizations".to_string(), "true".to_string()),
-        ("codex_cli_simplified_flow".to_string(), "true".to_string()),
         ("state".to_string(), state.to_string()),
-        ("originator".to_string(), originator().value),
+        ("aud".to_string(), aud_json),
     ];
-    if let Some(workspace_ids) = forced_chatgpt_workspace_ids {
-        query.push(("allowed_workspace_id".to_string(), workspace_ids.join(",")));
-    }
     let qs = query
         .into_iter()
         .map(|(k, v)| format!("{k}={}", urlencoding::encode(&v)))
         .collect::<Vec<_>>()
         .join("&");
-    format!("{issuer}/oauth/authorize?{qs}")
+    format!("{authorization_endpoint}?{qs}")
+}
+
+/// SAKRYLLE: OIDC login — cross-platform browser open with fallback.
+/// Tries `open` (macOS), `xdg-open` (Linux), `start` (Windows), then `webbrowser` crate.
+/// If all fail, prints the URL so the user can open it manually.
+fn open_browser_with_fallback(url: &str) {
+    // Try platform-specific commands first
+    let result = if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(url).status()
+    } else if cfg!(target_os = "linux") {
+        std::process::Command::new("xdg-open").arg(url).status()
+    } else if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", url])
+            .status()
+    } else {
+        // Fall back to webbrowser crate
+        return if webbrowser::open(url).is_ok() {
+            info!("opened browser for login");
+        } else {
+            eprintln!("Could not open browser automatically. Please open this URL manually:\n\n{url}\n");
+        };
+    };
+
+    match result {
+        Ok(status) if status.success() => {
+            info!("opened browser for login");
+        }
+        _ => {
+            // Try webbrowser crate as second fallback
+            if webbrowser::open(url).is_err() {
+                eprintln!("Could not open browser automatically. Please open this URL manually:\n\n{url}\n");
+            }
+        }
+    }
 }
 
 fn generate_state() -> String {
@@ -541,62 +672,37 @@ fn send_cancel_request(port: u16) -> io::Result<()> {
     Ok(())
 }
 
+/// SAKRYLLE: OIDC login — bind to the given port. Port 0 lets the OS assign a random free port.
 fn bind_server(port: u16) -> io::Result<Server> {
-    let preferred_bind_address = format!("127.0.0.1:{port}");
-    let fallback_bind_address = format!("127.0.0.1:{FALLBACK_PORT}");
-    let mut bind_address = preferred_bind_address.clone();
-    let mut cancel_attempted = false;
-    let mut attempts = 0;
-    let mut using_fallback_port = false;
-    const MAX_ATTEMPTS: u32 = 10;
-    const RETRY_DELAY: Duration = Duration::from_millis(200);
+    let bind_address = format!("127.0.0.1:{port}");
 
-    loop {
-        match Server::http(&bind_address) {
-            Ok(server) => return Ok(server),
-            Err(err) => {
-                attempts += 1;
-                let is_addr_in_use = err
-                    .downcast_ref::<io::Error>()
-                    .map(|io_err| io_err.kind() == io::ErrorKind::AddrInUse)
-                    .unwrap_or(false);
-
-                // If the address is in use, there may be another instance of the login server
-                // running. Attempt to cancel it and retry before falling back.
-                if is_addr_in_use {
-                    if !cancel_attempted && !using_fallback_port {
-                        cancel_attempted = true;
-                        if let Err(cancel_err) = send_cancel_request(port) {
-                            eprintln!("Failed to cancel previous login server: {cancel_err}");
-                        }
-                    }
-
-                    thread::sleep(RETRY_DELAY);
-
-                    if attempts >= MAX_ATTEMPTS {
-                        if port == DEFAULT_PORT && !using_fallback_port {
-                            warn!(
-                                %preferred_bind_address,
-                                %fallback_bind_address,
-                                "default login callback port is unavailable; falling back to the registered fallback port"
-                            );
-                            bind_address = fallback_bind_address.clone();
-                            attempts = 0;
-                            using_fallback_port = true;
-                            continue;
-                        }
-
-                        return Err(io::Error::new(
-                            io::ErrorKind::AddrInUse,
-                            format!("Port {bind_address} is already in use"),
-                        ));
-                    }
-
-                    continue;
-                }
-
-                return Err(io::Error::other(err));
+    // SAKRYLLE: OIDC login — for random port (0), just bind once; no retry/fallback needed
+    match Server::http(&bind_address) {
+        Ok(server) => return Ok(server),
+        Err(err) => {
+            // If port was 0 (random), the OS should always find a free port — failure is fatal.
+            if port == 0 {
+                return Err(io::Error::other(format!(
+                    "Failed to bind to {bind_address}: {err}"
+                )));
             }
+
+            let is_addr_in_use = err
+                .downcast_ref::<io::Error>()
+                .map(|io_err| io_err.kind() == io::ErrorKind::AddrInUse)
+                .unwrap_or(false);
+
+            if is_addr_in_use {
+                // Attempt to cancel any existing login server on this port
+                if let Err(cancel_err) = send_cancel_request(port) {
+                    eprintln!("Failed to cancel previous login server: {cancel_err}");
+                }
+                thread::sleep(Duration::from_millis(200));
+                // Retry once
+                return Server::http(&bind_address).map_err(io::Error::other);
+            }
+
+            Err(io::Error::other(err))
         }
     }
 }
@@ -705,14 +811,14 @@ fn sanitize_url_for_logging(url: &str) -> String {
         Err(_) => "<invalid-url>".to_string(),
     }
 }
-/// Exchanges an authorization code for tokens.
+/// SAKRYLLE: OIDC login — exchanges an authorization code for tokens using the discovery token_endpoint.
 ///
 /// The returned error remains suitable for user-facing CLI/browser surfaces, so backend-provided
 /// non-JSON error text is preserved there. Structured logging stays narrower: it logs reviewed
 /// fields from parsed token responses and redacted transport errors, but does not log the final
 /// callback-layer `%err` string.
 pub(crate) async fn exchange_code_for_tokens(
-    issuer: &str,
+    token_endpoint: &str,
     client_id: &str,
     redirect_uri: &str,
     pkce: &PkceCodes,
@@ -720,16 +826,15 @@ pub(crate) async fn exchange_code_for_tokens(
 ) -> io::Result<ExchangedTokens> {
     #[derive(serde::Deserialize)]
     struct TokenResponse {
-        id_token: String,
+        #[serde(default)]
+        id_token: Option<String>,
         access_token: String,
         refresh_token: String,
     }
 
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
-    let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
     info!(
-        issuer = %sanitize_url_for_logging(issuer),
-        token_endpoint = %sanitize_url_for_logging(&token_endpoint),
+        token_endpoint = %sanitize_url_for_logging(token_endpoint),
         redirect_uri = %redirect_uri,
         "starting oauth token exchange"
     );
@@ -777,8 +882,9 @@ pub(crate) async fn exchange_code_for_tokens(
 
     let tokens: TokenResponse = resp.json().await.map_err(io::Error::other)?;
     info!(%status, "oauth token exchange succeeded");
+    // SAKRYLLE: OIDC login — id_token may be absent; use empty string as fallback
     Ok(ExchangedTokens {
-        id_token: tokens.id_token,
+        id_token: tokens.id_token.unwrap_or_default(),
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
     })
@@ -1063,32 +1169,20 @@ fn parse_token_endpoint_error(body: &str) -> TokenEndpointErrorDetail {
     }
 }
 
-/// Renders the branded error page used by callback failures.
+/// SAKRYLLE: OIDC login — renders the Sakrylle-branded error page used by callback failures.
 fn render_login_error_page(
     message: &str,
     error_code: Option<&str>,
     error_description: Option<&str>,
 ) -> Vec<u8> {
     let code = error_code.unwrap_or("unknown_error");
-    let (title, display_message, display_description, help_text) =
-        if is_missing_codex_entitlement_error(code, error_description) {
-            (
-                "You do not have access to Codex".to_string(),
-                "This account is not currently authorized to use Codex in this workspace."
-                    .to_string(),
-                "Contact your workspace administrator to request access to Codex.".to_string(),
-                "Contact your workspace administrator to get access to Codex, then return to Codex and try again."
-                    .to_string(),
-            )
-        } else {
-            (
-                "Sign-in could not be completed".to_string(),
-                message.to_string(),
-                error_description.unwrap_or(message).to_string(),
-                "Return to Codex to retry, switch accounts, or contact your workspace admin if access is restricted."
-                    .to_string(),
-            )
-        };
+    let title = "Sign-in could not be completed".to_string();
+    let display_message = message.to_string();
+    let display_description = error_description.unwrap_or(message).to_string();
+    let help_text =
+        "Return to the terminal and try again. If the problem persists, check your account status."
+            .to_string();
+
     LOGIN_ERROR_PAGE_TEMPLATE
         .render([
             ("error_title", html_escape(&title)),

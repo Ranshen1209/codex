@@ -81,7 +81,13 @@ impl From<AgentIdentityJwtClaims> for AgentIdentityAuthRecord {
     }
 }
 
+/// SAKRYLLE: OIDC login — auth file path follows SAKRYLLE_CLI_HOME env or falls back to codex_home.
 pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {
+    // SAKRYLLE: OIDC login — check SAKRYLLE_CLI_HOME env var first
+    if let Ok(sakrylle_home) = std::env::var("SAKRYLLE_CLI_HOME") {
+        let sakrylle_path = PathBuf::from(sakrylle_home);
+        return sakrylle_path.join("auth.json");
+    }
     codex_home.join("auth.json")
 }
 

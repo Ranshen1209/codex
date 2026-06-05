@@ -1,13 +1,12 @@
 use reqwest::StatusCode;
 use serde::Deserialize;
-use serde::Serialize;
 use serde::de::Deserializer;
 use serde::de::{self};
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
+use crate::server::fetch_discovery;
 use codex_client::build_reqwest_client_with_custom_ca;
 use std::io;
 
@@ -15,33 +14,28 @@ const ANSI_BLUE: &str = "\x1b[94m";
 const ANSI_GRAY: &str = "\x1b[90m";
 const ANSI_RESET: &str = "\x1b[0m";
 
+/// SAKRYLLE: OIDC login — device code info per RFC 8628.
 #[derive(Debug, Clone)]
 pub struct DeviceCode {
     pub verification_url: String,
     pub user_code: String,
-    device_auth_id: String,
+    device_code: String,
     interval: u64,
 }
 
+/// SAKRYLLE: OIDC login — RFC 8628 device authorization response.
 #[derive(Deserialize)]
 struct UserCodeResp {
-    device_auth_id: String,
-    #[serde(alias = "user_code", alias = "usercode")]
+    device_code: String,
     user_code: String,
+    verification_uri: String,
     #[serde(default, deserialize_with = "deserialize_interval")]
     interval: u64,
+    #[serde(default)]
+    expires_in: Option<u64>,
 }
 
-#[derive(Serialize)]
-struct UserCodeReq {
-    client_id: String,
-}
-
-#[derive(Serialize)]
-struct TokenPollReq {
-    device_auth_id: String,
-    user_code: String,
-}
+// SAKRYLLE: OIDC login — request structs removed; using form-encoded body directly per RFC 8628.
 
 fn deserialize_interval<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
@@ -51,27 +45,33 @@ where
     s.trim().parse::<u64>().map_err(de::Error::custom)
 }
 
+/// SAKRYLLE: OIDC login — RFC 8628 token success response.
 #[derive(Deserialize)]
-struct CodeSuccessResp {
-    authorization_code: String,
-    code_challenge: String,
-    code_verifier: String,
+struct TokenSuccessResp {
+    access_token: String,
+    #[serde(default)]
+    id_token: Option<String>,
+    refresh_token: String,
+    token_type: Option<String>,
+    expires_in: Option<u64>,
 }
 
-/// Request the user code and polling interval.
+/// SAKRYLLE: OIDC login — request the device code via RFC 8628.
+/// Uses the discovery `device_authorization_endpoint`.
 async fn request_user_code(
     client: &reqwest::Client,
-    auth_base_url: &str,
+    device_auth_endpoint: &str,
     client_id: &str,
+    scope: &str,
 ) -> std::io::Result<UserCodeResp> {
-    let url = format!("{auth_base_url}/deviceauth/usercode");
-    let body = serde_json::to_string(&UserCodeReq {
-        client_id: client_id.to_string(),
-    })
-    .map_err(std::io::Error::other)?;
+    let body = format!(
+        "client_id={}&scope={}",
+        urlencoding::encode(client_id),
+        urlencoding::encode(scope),
+    );
     let resp = client
-        .post(url)
-        .header("Content-Type", "application/json")
+        .post(device_auth_endpoint)
+        .header("Content-Type", "application/x-www-form-urlencoded")
         .body(body)
         .send()
         .await
@@ -82,12 +82,12 @@ async fn request_user_code(
         if status == StatusCode::NOT_FOUND {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                "device code login is not enabled for this Codex server. Use the browser login or verify the server URL.",
+                "device code login is not enabled for this server. Use the browser login instead.",
             ));
         }
-
+        let body_text = resp.text().await.unwrap_or_default();
         return Err(std::io::Error::other(format!(
-            "device code request failed with status {status}"
+            "device code request failed with status {status}: {body_text}"
         )));
     }
 
@@ -95,27 +95,27 @@ async fn request_user_code(
     serde_json::from_str(&body).map_err(std::io::Error::other)
 }
 
-/// Poll token endpoint until a code is issued or timeout occurs.
+/// SAKRYLLE: OIDC login — poll the token endpoint per RFC 8628 until authorization completes.
 async fn poll_for_token(
     client: &reqwest::Client,
-    auth_base_url: &str,
-    device_auth_id: &str,
-    user_code: &str,
+    token_endpoint: &str,
+    device_code: &str,
+    client_id: &str,
     interval: u64,
-) -> std::io::Result<CodeSuccessResp> {
-    let url = format!("{auth_base_url}/deviceauth/token");
+) -> std::io::Result<TokenSuccessResp> {
     let max_wait = Duration::from_secs(15 * 60);
     let start = Instant::now();
 
     loop {
-        let body = serde_json::to_string(&TokenPollReq {
-            device_auth_id: device_auth_id.to_string(),
-            user_code: user_code.to_string(),
-        })
-        .map_err(std::io::Error::other)?;
+        let body = format!(
+            "grant_type={}&device_code={}&client_id={}",
+            urlencoding::encode("urn:ietf:params:oauth:grant-type:device_code"),
+            urlencoding::encode(device_code),
+            urlencoding::encode(client_id),
+        );
         let resp = client
-            .post(&url)
-            .header("Content-Type", "application/json")
+            .post(token_endpoint)
+            .header("Content-Type", "application/x-www-form-urlencoded")
             .body(body)
             .send()
             .await
@@ -127,7 +127,8 @@ async fn poll_for_token(
             return resp.json().await.map_err(std::io::Error::other);
         }
 
-        if status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND {
+        // RFC 8628: authorization_pending or slow_down
+        if status == StatusCode::BAD_REQUEST || status == StatusCode::FORBIDDEN {
             if start.elapsed() >= max_wait {
                 return Err(std::io::Error::other(
                     "device auth timed out after 15 minutes",
@@ -138,9 +139,9 @@ async fn poll_for_token(
             continue;
         }
 
+        let body_text = resp.text().await.unwrap_or_default();
         return Err(std::io::Error::other(format!(
-            "device auth failed with status {}",
-            resp.status()
+            "device auth failed with status {status}: {body_text}"
         )));
     }
 }
@@ -156,66 +157,59 @@ fn print_device_code_prompt(verification_url: &str, code: &str) {
     );
 }
 
+/// SAKRYLLE: OIDC login — request a device code using OIDC discovery.
 pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<DeviceCode> {
+    // SAKRYLLE: OIDC login — fetch discovery to get device_authorization_endpoint
+    let discovery = fetch_discovery(&opts.issuer).await?;
+    let device_auth_endpoint = discovery
+        .device_authorization_endpoint
+        .as_deref()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "device code login is not supported by this server (no device_authorization_endpoint in discovery)",
+            )
+        })?;
+
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
-    let base_url = opts.issuer.trim_end_matches('/');
-    let api_base_url = format!("{base_url}/api/accounts");
-    let uc = request_user_code(&client, &api_base_url, &opts.client_id).await?;
+    // SAKRYLLE: OIDC login — use Sakrylle scope
+    let scope = crate::server::SAKRYLLE_SCOPE;
+    let uc = request_user_code(&client, device_auth_endpoint, &opts.client_id, scope).await?;
 
     Ok(DeviceCode {
-        verification_url: format!("{base_url}/codex/device"),
+        verification_url: uc.verification_uri,
         user_code: uc.user_code,
-        device_auth_id: uc.device_auth_id,
+        device_code: uc.device_code,
         interval: uc.interval,
     })
 }
 
+/// SAKRYLLE: OIDC login — complete the device code login using RFC 8628 token polling.
 pub async fn complete_device_code_login(
     opts: ServerOptions,
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
+    // SAKRYLLE: OIDC login — fetch discovery for token endpoint
+    let discovery = fetch_discovery(&opts.issuer).await?;
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
-    let base_url = opts.issuer.trim_end_matches('/');
-    let api_base_url = format!("{base_url}/api/accounts");
 
-    let code_resp = poll_for_token(
+    // SAKRYLLE: OIDC login — poll the token endpoint directly (RFC 8628)
+    let token_resp = poll_for_token(
         &client,
-        &api_base_url,
-        &device_code.device_auth_id,
-        &device_code.user_code,
+        &discovery.token_endpoint,
+        &device_code.device_code,
+        &opts.client_id,
         device_code.interval,
     )
     .await?;
 
-    let pkce = PkceCodes {
-        code_verifier: code_resp.code_verifier,
-        code_challenge: code_resp.code_challenge,
-    };
-    let redirect_uri = format!("{base_url}/deviceauth/callback");
-
-    let tokens = crate::server::exchange_code_for_tokens(
-        base_url,
-        &opts.client_id,
-        &redirect_uri,
-        &pkce,
-        &code_resp.authorization_code,
-    )
-    .await
-    .map_err(|err| std::io::Error::other(format!("device code exchange failed: {err}")))?;
-
-    if let Err(message) = crate::server::ensure_workspace_allowed(
-        opts.forced_chatgpt_workspace_id.as_deref(),
-        &tokens.id_token,
-    ) {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
-    }
-
+    // SAKRYLLE: OIDC login — persist tokens directly (no separate code exchange needed)
     crate::server::persist_tokens_async(
         &opts.codex_home,
         /*api_key*/ None,
-        tokens.id_token,
-        tokens.access_token,
-        tokens.refresh_token,
+        token_resp.id_token.unwrap_or_default(),
+        token_resp.access_token,
+        token_resp.refresh_token,
         opts.cli_auth_credentials_store_mode,
     )
     .await

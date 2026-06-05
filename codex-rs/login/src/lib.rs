@@ -13,8 +13,11 @@ pub use device_code_auth::complete_device_code_login;
 pub use device_code_auth::request_device_code;
 pub use device_code_auth::run_device_code_login;
 pub use server::LoginServer;
+pub use server::OidcDiscovery;
 pub use server::ServerOptions;
 pub use server::ShutdownHandle;
+pub use server::fetch_discovery;
+pub use server::resolve_issuer;
 pub use server::run_login_server;
 
 pub use auth::AuthConfig;

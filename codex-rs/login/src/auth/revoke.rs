@@ -5,7 +5,6 @@
 //! available, and callers still complete their primary work if the revoke request
 //! fails.
 
-use serde::Serialize;
 use std::time::Duration;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
@@ -42,14 +41,6 @@ impl RevokeTokenKind {
             Self::Refresh => Some(CLIENT_ID),
         }
     }
-}
-
-#[derive(Serialize)]
-struct RevokeTokenRequest<'a> {
-    token: &'a str,
-    token_type_hint: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    client_id: Option<&'static str>,
 }
 
 pub(crate) async fn revoke_auth_tokens(
@@ -110,6 +101,7 @@ fn resolved_auth_mode(auth_dot_json: &AuthDotJson) -> ApiAuthMode {
     ApiAuthMode::Chatgpt
 }
 
+/// SAKRYLLE: OIDC login — revoke OAuth token using form-encoded body (standard OAuth2).
 async fn revoke_oauth_token(
     client: &CodexHttpClient,
     endpoint: &str,
@@ -117,17 +109,21 @@ async fn revoke_oauth_token(
     kind: RevokeTokenKind,
     timeout: Duration,
 ) -> Result<(), std::io::Error> {
-    let request = RevokeTokenRequest {
-        token,
-        token_type_hint: kind.as_str(),
-        client_id: kind.client_id(),
-    };
+    // SAKRYLLE: OIDC login — use form-encoded body per RFC 7009
+    let mut body = format!(
+        "token={}&token_type_hint={}",
+        urlencoding::encode(token),
+        urlencoding::encode(kind.as_str()),
+    );
+    if let Some(client_id) = kind.client_id() {
+        body.push_str(&format!("&client_id={}", urlencoding::encode(client_id)));
+    }
 
     let response = client
         .post(endpoint)
-        .header("Content-Type", "application/json")
+        .header("Content-Type", "application/x-www-form-urlencoded")
         .timeout(timeout)
-        .json(&request)
+        .body(body)
         .send()
         .await
         .map_err(std::io::Error::other)?;

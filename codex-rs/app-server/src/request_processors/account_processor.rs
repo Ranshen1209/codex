@@ -364,7 +364,7 @@ impl AccountRequestProcessor {
         codex_streamlined_login: bool,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         let opts = self.login_chatgpt_common(codex_streamlined_login).await?;
-        let server = run_login_server(opts)
+        let server = run_login_server(opts).await
             .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
         let login_id = Uuid::new_v4();
         let shutdown_handle = server.cancel_handle();

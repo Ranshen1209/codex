@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::StatusCode;
 use serde::Deserialize;
-use serde::Serialize;
 #[cfg(test)]
 use serial_test::serial;
 use std::env;
@@ -93,8 +92,9 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
     "Your access token could not be refreshed. Please log out and sign in again.";
 const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
 const DEFAULT_CHATGPT_BACKEND_BASE_URL: &str = "https://chatgpt.com/backend-api";
-const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
-pub(super) const REVOKE_TOKEN_URL: &str = "https://auth.openai.com/oauth/revoke";
+// SAKRYLLE: OIDC login — use Sakrylle issuer for token endpoints
+const REFRESH_TOKEN_URL: &str = "https://sub.sakrylle.com/oauth/token";
+pub(super) const REVOKE_TOKEN_URL: &str = "https://sub.sakrylle.com/oauth/revoke";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
 pub const REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REVOKE_TOKEN_URL_OVERRIDE";
 static NEXT_DUMMY_AUTH_ID: AtomicU64 = AtomicU64::new(1);
@@ -821,25 +821,26 @@ fn persist_tokens(
     Ok(auth_dot_json)
 }
 
-// Requests refreshed ChatGPT OAuth tokens from the auth service using a refresh token.
-// The caller is responsible for persisting any returned tokens.
+// SAKRYLLE: OIDC login — requests refreshed OAuth tokens using form-encoded body (standard OAuth2).
+// Handles refresh_token rotation: sub2api may return a new refresh_token that must be persisted.
 async fn request_chatgpt_token_refresh(
     refresh_token: String,
     client: &CodexHttpClient,
 ) -> Result<RefreshResponse, RefreshTokenError> {
-    let refresh_request = RefreshRequest {
-        client_id: CLIENT_ID,
-        grant_type: "refresh_token",
-        refresh_token,
-    };
-
     let endpoint = refresh_token_endpoint();
 
-    // Use shared client factory to include standard headers
+    // SAKRYLLE: OIDC login — use form-encoded body per OAuth2 spec
+    let body = format!(
+        "grant_type={}&refresh_token={}&client_id={}",
+        urlencoding::encode("refresh_token"),
+        urlencoding::encode(&refresh_token),
+        urlencoding::encode(CLIENT_ID),
+    );
+
     let response = client
         .post(endpoint.as_str())
-        .header("Content-Type", "application/json")
-        .json(&refresh_request)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body)
         .send()
         .await
         .map_err(|err| RefreshTokenError::Transient(std::io::Error::other(err)))?;
@@ -921,13 +922,6 @@ fn extract_refresh_token_error_code(body: &str) -> Option<String> {
     map.get("code").and_then(Value::as_str).map(str::to_string)
 }
 
-#[derive(Serialize)]
-struct RefreshRequest {
-    client_id: &'static str,
-    grant_type: &'static str,
-    refresh_token: String,
-}
-
 #[derive(Deserialize, Clone)]
 struct RefreshResponse {
     id_token: Option<String>,
@@ -935,8 +929,8 @@ struct RefreshResponse {
     refresh_token: Option<String>,
 }
 
-// Shared constant for token refresh (client id used for oauth token refresh flow)
-pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+// SAKRYLLE: OIDC login — shared constant for token refresh (client id used for oauth token refresh flow)
+pub const CLIENT_ID: &str = "sakrylle-cli";
 
 fn refresh_token_endpoint() -> String {
     std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)

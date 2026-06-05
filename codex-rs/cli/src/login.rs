@@ -124,7 +124,7 @@ pub async fn login_with_chatgpt(
         forced_chatgpt_workspace_id,
         cli_auth_credentials_store_mode,
     );
-    let server = run_login_server(opts)?;
+    let server = run_login_server(opts).await?;
 
     print_login_server_start(server.actual_port, &server.auth_url);
 
@@ -335,7 +335,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         Err(e) => {
             if e.kind() == std::io::ErrorKind::NotFound {
                 eprintln!("Device code login is not enabled; falling back to browser login.");
-                match run_login_server(opts) {
+                match run_login_server(opts).await {
                     Ok(server) => {
                         print_login_server_start(server.actual_port, &server.auth_url);
                         match server.block_until_done().await {
