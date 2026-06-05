@@ -1344,37 +1344,27 @@ async fn run_ratatui_app(
                 eprintln!();
                 eprintln!("  Welcome to Sakrylle CLI");
                 eprintln!();
-                eprintln!("  No credentials found. Would you like to login?");
+                eprintln!("  No credentials found. Opening browser for login...");
                 eprintln!();
-                eprintln!("  [Y] Yes, open browser to login");
-                eprintln!("  [N] No, continue without login");
-                eprintln!();
-                eprint!("  > ");
 
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input).ok();
+                let exe = std::env::current_exe()
+                    .unwrap_or_else(|_| "sakrylle".into());
 
-                if input.trim().to_lowercase() == "y" || input.trim().is_empty() {
-                    let exe = std::env::current_exe()
-                        .unwrap_or_else(|_| "sakrylle".into());
-
-                    match std::process::Command::new(&exe)
-                        .arg("login")
-                        .status()
-                    {
-                        Ok(status) if status.success() => {
-                            eprintln!("Login successful! Please restart Sakrylle CLI.");
-                            std::process::exit(0);
-                        }
-                        Ok(status) => {
-                            eprintln!("Login failed with status: {status}");
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to start login: {e}");
-                        }
+                match std::process::Command::new(&exe)
+                    .arg("login")
+                    .status()
+                {
+                    Ok(status) if status.success() => {
+                        eprintln!("  Login successful! Continuing...");
                     }
-                } else {
-                    eprintln!("Continuing without login. Use /login to login later.");
+                    Ok(status) => {
+                        eprintln!("  Login failed with status: {status}");
+                        eprintln!("  You can try again later with: sakrylle login");
+                    }
+                    Err(e) => {
+                        eprintln!("  Failed to start login: {e}");
+                        eprintln!("  You can try again later with: sakrylle login");
+                    }
                 }
             }
         }
