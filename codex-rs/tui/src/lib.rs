@@ -93,7 +93,6 @@ mod app_event_sender;
 mod app_server_approval_conversions;
 mod app_server_session;
 mod approval_events;
-mod ascii_animation;
 #[cfg(not(target_os = "linux"))]
 mod audio_device;
 #[cfg(target_os = "linux")]
@@ -133,7 +132,6 @@ mod external_agent_config_migration;
 mod external_agent_config_migration_startup;
 mod external_editor;
 mod file_search;
-mod frames;
 mod get_git_diff;
 mod git_action_directives;
 mod goal_display;
