@@ -2,15 +2,26 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
 use std::path::PathBuf;
 
-/// Returns the path to the Codex configuration directory, which can be
-/// specified by the `CODEX_HOME` environment variable. If not set, defaults to
-/// `~/.codex`.
+/// Returns the path to the Sakrylle CLI configuration directory.
 ///
-/// - If `CODEX_HOME` is set, the value must exist and be a directory. The
+/// Resolution order (highest priority first):
+///   1. `SAKRYLLE_CLI_HOME` — Sakrylle-specific override
+///   2. `CODEX_HOME` — upstream Codex fallback (for migration compatibility)
+///   3. `~/.sakrylle-cli` — default
+///
+/// - If either env var is set, the value must exist and be a directory. The
 ///   value will be canonicalized and this function will Err otherwise.
-/// - If `CODEX_HOME` is not set, this function does not verify that the
+/// - If no env var is set, this function does not verify that the
 ///   directory exists.
 pub fn find_codex_home() -> std::io::Result<AbsolutePathBuf> {
+    // Sakrylle-specific env takes highest priority.
+    let sakrylle_home_env = std::env::var("SAKRYLLE_CLI_HOME")
+        .ok()
+        .filter(|val| !val.is_empty());
+    if sakrylle_home_env.is_some() {
+        return find_codex_home_from_env(sakrylle_home_env.as_deref());
+    }
+    // Fallback to upstream CODEX_HOME for migration compatibility.
     let codex_home_env = std::env::var("CODEX_HOME")
         .ok()
         .filter(|val| !val.is_empty());
@@ -56,7 +67,7 @@ fn find_codex_home_from_env(codex_home_env: Option<&str>) -> std::io::Result<Abs
                     "Could not find home directory",
                 )
             })?;
-            p.push(".codex");
+            p.push(".sakrylle-cli");
             AbsolutePathBuf::from_absolute_path(p)
         }
     }
@@ -127,7 +138,7 @@ mod tests {
         let resolved =
             find_codex_home_from_env(/*codex_home_env*/ None).expect("default CODEX_HOME");
         let mut expected = home_dir().expect("home dir");
-        expected.push(".codex");
+        expected.push(".sakrylle-cli");
         let expected = AbsolutePathBuf::from_absolute_path(expected).expect("absolute home");
         assert_eq!(resolved, expected);
     }

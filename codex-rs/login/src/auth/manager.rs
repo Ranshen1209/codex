@@ -467,6 +467,7 @@ impl ChatgptAuth {
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub const CODEX_API_KEY_ENV_VAR: &str = "CODEX_API_KEY";
 pub const CODEX_ACCESS_TOKEN_ENV_VAR: &str = "CODEX_ACCESS_TOKEN";
+pub const SAKRYLLE_API_KEY_ENV_VAR: &str = "SAKRYLLE_API_KEY";
 
 pub fn read_openai_api_key_from_env() -> Option<String> {
     env::var(OPENAI_API_KEY_ENV_VAR)
@@ -475,7 +476,15 @@ pub fn read_openai_api_key_from_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+pub fn read_sakrylle_api_key_from_env() -> Option<String> {
+    read_non_empty_env_var(SAKRYLLE_API_KEY_ENV_VAR)
+}
+
 pub fn read_codex_api_key_from_env() -> Option<String> {
+    // SAKRYLLE_API_KEY takes highest priority (Sakrylle CLI fork).
+    if let Some(key) = read_sakrylle_api_key_from_env() {
+        return Some(key);
+    }
     read_non_empty_env_var(CODEX_API_KEY_ENV_VAR)
 }
 

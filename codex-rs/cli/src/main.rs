@@ -84,7 +84,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
 
-/// Codex CLI
+// SAKRYLLE: brand replacement
+/// Sakrylle CLI
 ///
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
 #[derive(Debug, Parser)]
@@ -95,9 +96,10 @@ use codex_terminal_detection::TerminalName;
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like
     // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the generic `codex` command name that users run.
-    bin_name = "codex",
-    override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
+    // the generic `sakrylle` command name that users run.
+    bin_name = "sakrylle",
+    override_usage = "sakrylle [OPTIONS] [PROMPT]\n       sakrylle [OPTIONS] <COMMAND> [ARGS]",
+    alias = "skl"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -118,7 +120,7 @@ struct MultitoolCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Subcommand {
-    /// Run Codex non-interactively.
+    /// Run Sakrylle non-interactively.
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
 
@@ -131,13 +133,13 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// Manage external MCP servers for Codex.
+    /// Manage external MCP servers for Sakrylle.
     Mcp(McpCli),
 
-    /// Manage Codex plugins.
+    /// Manage Sakrylle plugins.
     Plugin(PluginCli),
 
-    /// Start Codex as an MCP server (stdio).
+    /// Start Sakrylle as an MCP server (stdio).
     McpServer(McpServerCommand),
 
     /// [experimental] Run the app server or related tooling.
@@ -146,20 +148,20 @@ enum Subcommand {
     /// [experimental] Manage the app-server daemon with remote control enabled.
     RemoteControl(RemoteControlCommand),
 
-    /// Launch the Codex desktop app (opens the app installer if missing).
+    /// Launch the Sakrylle desktop app (opens the app installer if missing).
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     App(app_cmd::AppCommand),
 
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
-    /// Update Codex to the latest version.
+    /// Update Sakrylle to the latest version.
     Update,
 
-    /// Diagnose local Codex installation, config, auth, and runtime health.
+    /// Diagnose local Sakrylle installation, config, auth, and runtime health.
     Doctor(DoctorCommand),
 
-    /// Run commands within a Codex-provided sandbox.
+    /// Run commands within a Sakrylle-provided sandbox.
     Sandbox(HostSandboxArgs),
 
     /// Debugging tools.
@@ -169,7 +171,7 @@ enum Subcommand {
     #[clap(hide = true)]
     Execpolicy(ExecpolicyCommand),
 
-    /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
+    /// Apply the latest diff produced by Sakrylle agent as a `git apply` to your local working tree.
     #[clap(visible_alias = "a")]
     Apply(ApplyCommand),
 
@@ -185,7 +187,7 @@ enum Subcommand {
     /// Fork a previous interactive session (picker by default; use --last to fork the most recent).
     Fork(ForkCommand),
 
-    /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
+    /// [EXPERIMENTAL] Browse tasks from Sakrylle Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
 
@@ -420,13 +422,14 @@ struct LoginCommand {
 
     #[arg(
         long = "with-api-key",
-        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
+        // SAKRYLLE: brand replacement
+        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | sakrylle login --with-api-key`)"
     )]
     with_api_key: bool,
 
     #[arg(
         long = "with-access-token",
-        help = "Read the access token from stdin (e.g. `printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`)"
+        help = "Read the access token from stdin (e.g. `printenv CODEX_ACCESS_TOKEN | sakrylle login --with-access-token`)"
     )]
     with_access_token: bool,
 
@@ -707,7 +710,8 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
     let cmd_str = action.command_str();
-    println!("Updating Codex via `{cmd_str}`...");
+    // SAKRYLLE: brand replacement
+    println!("Updating Sakrylle via `{cmd_str}`...");
 
     let status = {
         #[cfg(windows)]
@@ -742,7 +746,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     if !status.success() {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }
-    println!("\n🎉 Update ran successfully! Please restart Codex.");
+    println!("\n🎉 Update ran successfully! Please restart Sakrylle.");
     Ok(())
 }
 
@@ -750,7 +754,7 @@ fn run_update_command() -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     {
         anyhow::bail!(
-            "`codex update` is not available in debug builds. Install a release build of Codex to use this command."
+            "`sakrylle update` is not available in debug builds. Install a release build of Sakrylle to use this command."
         );
     }
 
@@ -758,7 +762,7 @@ fn run_update_command() -> anyhow::Result<()> {
     {
         let Some(action) = codex_tui::get_update_action() else {
             anyhow::bail!(
-                "Could not detect the Codex installation method. Please update manually: https://developers.openai.com/codex/cli/"
+                "Could not detect the Sakrylle installation method. Please update manually: https://doc.sakrylle.com/developers/cli/"
             );
         };
         run_update_action(action)
@@ -1273,7 +1277,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         .await;
                     } else if login_cli.api_key.is_some() {
                         eprintln!(
-                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | sakrylle login --with-api-key`."
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
@@ -1392,7 +1396,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
             {
                 let _ = loader_overrides;
-                anyhow::bail!("`codex sandbox` is not supported on this operating system");
+                anyhow::bail!("`sakrylle sandbox` is not supported on this operating system");
             }
         }
         Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
@@ -1576,7 +1580,7 @@ fn profile_v2_for_subcommand<'a>(
             subcommand: DebugSubcommand::PromptInput(_),
         }) => Ok(Some(profile_v2)),
         _ => anyhow::bail!(
-            "--profile only applies to runtime commands and `codex mcp`: `codex`, `codex exec`, `codex review`, `codex resume`, `codex archive`, `codex unarchive`, `codex fork`, `codex mcp`, `codex sandbox`, and `codex debug prompt-input`."
+            "--profile only applies to runtime commands and `sakrylle mcp`: `sakrylle`, `sakrylle exec`, `sakrylle review`, `sakrylle resume`, `sakrylle archive`, `sakrylle unarchive`, `sakrylle fork`, `sakrylle mcp`, `sakrylle sandbox`, and `sakrylle debug prompt-input`."
         ),
     }
 }
@@ -1647,7 +1651,8 @@ async fn load_exec_server_remote_auth_provider(
 
     let auth = load_exec_server_remote_auth(
         config,
-        "remote exec-server registration requires ChatGPT authentication or API key authentication; run `codex login` or set CODEX_API_KEY",
+        // SAKRYLLE: brand replacement
+        "remote exec-server registration requires ChatGPT authentication or API key authentication; run `sakrylle login` or set CODEX_API_KEY",
     )
     .await?;
 
@@ -1947,12 +1952,12 @@ fn reject_remote_mode_for_subcommand(
 ) -> anyhow::Result<()> {
     if let Some(remote) = remote {
         anyhow::bail!(
-            "`--remote {remote}` is only supported for interactive TUI commands, not `codex {subcommand}`"
+            "`--remote {remote}` is only supported for interactive TUI commands, not `sakrylle {subcommand}`"
         );
     }
     if remote_auth_token_env.is_some() {
         anyhow::bail!(
-            "`--remote-auth-token-env` is only supported for interactive TUI commands, not `codex {subcommand}`"
+            "`--remote-auth-token-env` is only supported for interactive TUI commands, not `sakrylle {subcommand}`"
         );
     }
     Ok(())
@@ -1978,7 +1983,7 @@ fn reject_root_strict_config_for_subcommand(
 /// flag should be rejected after parsing.
 ///
 /// `--strict-config` is parsed on the root interactive CLI so commands like
-/// `codex --strict-config` continue to work for the TUI and for wrappers that
+/// `sakrylle --strict-config` continue to work for the TUI and for wrappers that
 /// forward root options into another command shape. Clap will still accept that
 /// root flag before the dispatcher knows which subcommand the user selected, so
 /// unsupported subcommands need an explicit post-parse reject path.
@@ -2042,7 +2047,7 @@ fn reject_strict_config_for_unsupported_subcommand(
     subcommand: &str,
 ) -> anyhow::Result<()> {
     if strict_config {
-        anyhow::bail!("`--strict-config` is not supported for `codex {subcommand}`");
+        anyhow::bail!("`--strict-config` is not supported for `sakrylle {subcommand}`");
     }
     Ok(())
 }
@@ -2244,7 +2249,7 @@ fn confirm(prompt: &str) -> std::io::Result<bool> {
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
-/// Build the final `TuiCli` for a `codex resume` invocation.
+/// Build the final `TuiCli` for a `sakrylle resume` invocation.
 fn finalize_resume_interactive(
     mut interactive: TuiCli,
     root_config_overrides: CliConfigOverrides,
@@ -2272,7 +2277,7 @@ fn finalize_resume_interactive(
     interactive
 }
 
-/// Build the final `TuiCli` for a `codex fork` invocation.
+/// Build the final `TuiCli` for a `sakrylle fork` invocation.
 fn finalize_fork_interactive(
     mut interactive: TuiCli,
     root_config_overrides: CliConfigOverrides,
@@ -2357,8 +2362,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
 }
 
 fn print_completion(cmd: CompletionCommand) {
+    // SAKRYLLE: brand replacement
     let mut app = MultitoolCli::command();
-    let name = "codex";
+    let name = "sakrylle";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
 
@@ -3234,7 +3240,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "`--strict-config` is not supported for `codex mcp`"
+            "`--strict-config` is not supported for `sakrylle mcp`"
         );
 
         let cli = MultitoolCli::try_parse_from(["codex", "--strict-config", "remote-control"])
@@ -3247,7 +3253,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "`--strict-config` is not supported for `codex remote-control`"
+            "`--strict-config` is not supported for `sakrylle remote-control`"
         );
     }
 
@@ -3263,7 +3269,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "`--strict-config` is not supported for `codex app-server proxy`"
+            "`--strict-config` is not supported for `sakrylle app-server proxy`"
         );
     }
 

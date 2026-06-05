@@ -91,11 +91,12 @@ impl WidgetRef for &WelcomeWidget {
             lines.extend(frame.lines().map(Into::into));
             lines.push("".into());
         }
+        // SAKRYLLE: brand replacement
         lines.push(Line::from(vec![
             "  ".into(),
             "Welcome to ".into(),
-            "Codex".bold(),
-            ", OpenAI's command-line coding agent".into(),
+            "Sakrylle CLI".bold(),
+            ", Your AI-powered coding assistant".into(),
         ]));
 
         Paragraph::new(lines)

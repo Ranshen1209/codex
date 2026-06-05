@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Unified entry point for the Codex CLI.
+// SAKRYLLE: brand replacement
+// Unified entry point for the Sakrylle CLI.
 
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync } from "fs";
@@ -75,7 +76,8 @@ if (!platformPackage) {
   throw new Error(`Unsupported target triple: ${targetTriple}`);
 }
 
-const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
+// SAKRYLLE: brand replacement - binary name mapping
+const codexBinaryName = process.platform === "win32" ? "sakrylle.exe" : "sakrylle";
 const localVendorRoot = path.join(__dirname, "..", "vendor");
 const packageBinaryPath = (vendorRoot) =>
   path.join(vendorRoot, targetTriple, "bin", codexBinaryName);
@@ -117,10 +119,10 @@ if (!nativePackage) {
   const packageManager = detectPackageManager();
   const updateCommand =
     packageManager === "bun"
-      ? "bun install -g @openai/codex@latest"
-      : "npm install -g @openai/codex@latest";
+      ? "bun install -g @sakrylle/cli@latest"
+      : "npm install -g @sakrylle/cli@latest";
   throw new Error(
-    `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
+    `Missing optional dependency ${platformPackage}. Reinstall Sakrylle: ${updateCommand}`,
   );
 }
 

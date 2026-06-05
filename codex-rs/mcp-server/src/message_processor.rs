@@ -217,8 +217,9 @@ impl MessageProcessor {
             *suffix = Some(user_agent_suffix);
         }
 
+        // SAKRYLLE: brand replacement
         let server_info =
-            Implementation::new("codex-mcp-server", env!("CARGO_PKG_VERSION")).with_title("Codex");
+            Implementation::new("codex-mcp-server", env!("CARGO_PKG_VERSION")).with_title("Sakrylle");
 
         // Preserve Codex's existing non-spec `serverInfo.user_agent` field.
         let mut server_info_value = match serde_json::to_value(&server_info) {

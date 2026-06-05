@@ -35,6 +35,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_model_provider_info::SAKRYLLE_PROVIDER_ID;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
@@ -58,9 +59,10 @@ use serde::Serialize;
 use serde::de::Error as SerdeError;
 use serde_json::Value as JsonValue;
 
-const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
+const RESERVED_MODEL_PROVIDER_IDS: [&str; 5] = [
     AMAZON_BEDROCK_PROVIDER_ID,
     OPENAI_PROVIDER_ID,
+    SAKRYLLE_PROVIDER_ID,
     OLLAMA_OSS_PROVIDER_ID,
     LMSTUDIO_OSS_PROVIDER_ID,
 ];
@@ -463,8 +465,9 @@ pub struct ConfigToml {
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
 
-    /// When `false`, disables analytics across Codex product surfaces in this machine.
-    /// Defaults to `true`.
+    // SAKRYLLE: telemetry default off
+    /// When `false`, disables analytics across Sakrylle product surfaces in this machine.
+    /// Defaults to `false`.
     pub analytics: Option<AnalyticsConfigToml>,
 
     /// When `false`, disables feedback collection across Codex product surfaces.
@@ -886,6 +889,7 @@ pub fn validate_reserved_model_provider_ids(
         .keys()
         .filter(|key| {
             key.as_str() != AMAZON_BEDROCK_PROVIDER_ID
+                && key.as_str() != SAKRYLLE_PROVIDER_ID
                 && RESERVED_MODEL_PROVIDER_IDS.contains(&key.as_str())
         })
         .map(|key| format!("`{key}`"))

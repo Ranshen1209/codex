@@ -35,6 +35,9 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+const SAKRYLLE_PROVIDER_NAME: &str = "Sakrylle API";
+pub const SAKRYLLE_PROVIDER_ID: &str = "sakrylle";
+pub const SAKRYLLE_DEFAULT_BASE_URL: &str = "https://api.sakrylle.com/v1";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 pub const AMAZON_BEDROCK_GPT_5_5_MODEL_ID: &str = "openai.gpt-5.5";
@@ -353,6 +356,35 @@ impl ModelProviderInfo {
         }
     }
 
+    pub fn create_sakrylle_provider() -> ModelProviderInfo {
+        let base_url = std::env::var("SAKRYLLE_API_BASE_URL")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| SAKRYLLE_DEFAULT_BASE_URL.to_string());
+        ModelProviderInfo {
+            name: SAKRYLLE_PROVIDER_NAME.into(),
+            base_url: Some(base_url),
+            env_key: Some("SAKRYLLE_API_KEY".to_string()),
+            env_key_instructions: Some(
+                "Create an API key at https://sub.sakrylle.com and set SAKRYLLE_API_KEY"
+                    .to_string(),
+            ),
+            experimental_bearer_token: None,
+            auth: None,
+            aws: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
+
     pub fn create_amazon_bedrock_provider(
         aws: Option<ModelProviderAwsAuthInfo>,
     ) -> ModelProviderInfo {
@@ -413,13 +445,11 @@ pub fn built_in_model_providers(
     use ModelProviderInfo as P;
     let openai_provider = P::create_openai_provider(openai_base_url);
     let amazon_bedrock_provider = P::create_amazon_bedrock_provider(/*aws*/ None);
+    let sakrylle_provider = P::create_sakrylle_provider();
 
-    // We do not want to be in the business of adjucating which third-party
-    // providers are bundled with Codex CLI, so we only include the OpenAI and
-    // open source ("oss") providers by default. Users are encouraged to add to
-    // `model_providers` in config.toml to add their own providers.
     [
         (OPENAI_PROVIDER_ID, openai_provider),
+        (SAKRYLLE_PROVIDER_ID, sakrylle_provider),
         (AMAZON_BEDROCK_PROVIDER_ID, amazon_bedrock_provider),
         (
             OLLAMA_OSS_PROVIDER_ID,
@@ -464,6 +494,26 @@ pub fn merge_configured_model_providers(
                 if let Some(region) = aws_override.region {
                     built_in_aws.region = Some(region);
                 }
+            }
+        } else if key == SAKRYLLE_PROVIDER_ID {
+            // Sakrylle provider is fully user-customizable (base_url, env_key, etc.)
+            // Merge: user config overrides built-in defaults.
+            if let Some(existing) = model_providers.get_mut(&key) {
+                // Only override fields that the user explicitly set.
+                if provider.base_url.is_some() {
+                    existing.base_url = provider.base_url;
+                }
+                if provider.env_key.is_some() {
+                    existing.env_key = provider.env_key;
+                }
+                if provider.env_key_instructions.is_some() {
+                    existing.env_key_instructions = provider.env_key_instructions;
+                }
+                if provider.name != ModelProviderInfo::default().name {
+                    existing.name = provider.name;
+                }
+            } else {
+                model_providers.insert(key, provider);
             }
         } else {
             model_providers.entry(key).or_insert(provider);

@@ -49,7 +49,7 @@ use std::path::PathBuf;
 use toml::Value as TomlValue;
 
 #[cfg(unix)]
-const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
+const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/sakrylle/config.toml";
 
 #[cfg(windows)]
 const DEFAULT_PROGRAM_DATA_DIR_WINDOWS: &str = r"C:\ProgramData";

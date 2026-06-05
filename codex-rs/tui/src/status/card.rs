@@ -708,9 +708,10 @@ fn status_approval_label(
 impl HistoryCell for StatusHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
+        // SAKRYLLE: brand replacement
         lines.push(Line::from(vec![
             Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim(),
-            Span::from("OpenAI Codex").bold(),
+            Span::from("Sakrylle CLI").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{CODEX_CLI_VERSION})")).dim(),
         ]));
@@ -727,8 +728,9 @@ impl HistoryCell for StatusHistoryCell {
                 (None, Some(plan)) => plan.clone(),
                 (None, None) => "ChatGPT".to_string(),
             },
+            // SAKRYLLE: brand replacement
             StatusAccountDisplay::ApiKey => {
-                "API key configured (run codex login to use ChatGPT)".to_string()
+                "API key configured (run sakrylle login for more options)".to_string()
             }
         });
 

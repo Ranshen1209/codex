@@ -16,6 +16,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_login::read_openai_api_key_from_env;
+use codex_login::SAKRYLLE_API_KEY_ENV_VAR;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -386,10 +387,11 @@ impl AuthModeWidget {
     }
 
     fn render_pick_mode(&self, area: Rect, buf: &mut Buffer) {
+        // SAKRYLLE: brand replacement
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
                 "  ".into(),
-                "Sign in with ChatGPT to use Codex as part of your paid plan".into(),
+                "Sign in with Sakrylle to access your account".into(),
             ]),
             Line::from(vec![
                 "  ".into(),
@@ -543,6 +545,7 @@ impl AuthModeWidget {
     }
 
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
+        // SAKRYLLE: brand replacement
         let lines = vec![
             "✓ Signed in with your ChatGPT account"
                 .fg(Color::Green)
@@ -550,18 +553,18 @@ impl AuthModeWidget {
             "".into(),
             "  Before you start:".into(),
             "".into(),
-            "  Decide how much autonomy you want to grant Codex".into(),
+            "  Decide how much autonomy you want to grant Sakrylle".into(),
             Line::from(vec![
                 "  For more details see the ".into(),
                 crate::terminal_hyperlinks::osc8_hyperlink(
-                    "https://developers.openai.com/codex/security",
-                    "Codex docs",
+                    "https://doc.sakrylle.com/developers/security",
+                    "Sakrylle docs",
                 )
                 .underlined(),
             ])
             .dim(),
             "".into(),
-            "  Codex can make mistakes".into(),
+            "  Sakrylle can make mistakes".into(),
             "  Review the code it writes and commands it runs"
                 .dim()
                 .into(),
@@ -605,7 +608,8 @@ impl AuthModeWidget {
         let lines = vec![
             "✓ API key configured".fg(Color::Green).into(),
             "".into(),
-            "  Codex will use usage-based billing with your API key.".into(),
+            // SAKRYLLE: brand replacement
+            "  Sakrylle will use usage-based billing with your API key.".into(),
         ];
 
         Paragraph::new(lines)
@@ -624,7 +628,8 @@ impl AuthModeWidget {
         let mut intro_lines: Vec<Line> = vec![
             Line::from(vec![
                 "> ".into(),
-                "Use your own OpenAI API key for usage-based billing".bold(),
+                // SAKRYLLE: brand replacement
+                "Use your own API key for usage-based billing".bold(),
             ]),
             "".into(),
             "  Paste or type your API key below. It will be stored locally in auth.json.".into(),
@@ -772,7 +777,11 @@ impl AuthModeWidget {
             return;
         }
         self.set_error(/*message*/ None);
-        let prefill_from_env = read_openai_api_key_from_env();
+        // SAKRYLLE_API_KEY takes priority over OPENAI_API_KEY for pre-filling.
+        let prefill_from_env = std::env::var(SAKRYLLE_API_KEY_ENV_VAR)
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| read_openai_api_key_from_env());
         let mut guard = self.sign_in_state.write().unwrap();
         match &mut *guard {
             SignInState::ApiKeyEntry(state) => {
