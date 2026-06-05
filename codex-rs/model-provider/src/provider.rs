@@ -179,6 +179,14 @@ impl ModelProvider for ConfiguredModelProvider {
         &self.info
     }
 
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            namespace_tools: true,
+            image_generation: self.info.supports_image_generation,
+            web_search: true,
+        }
+    }
+
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
     }

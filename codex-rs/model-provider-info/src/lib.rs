@@ -137,6 +137,14 @@ pub struct ModelProviderInfo {
     /// Whether this provider supports the Responses API WebSocket transport.
     #[serde(default)]
     pub supports_websockets: bool,
+    /// Whether this provider supports image generation tools.
+    /// When false, image_generation tools will not be included in requests.
+    #[serde(default = "default_true")]
+    pub supports_image_generation: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// AWS SigV4 auth configuration for a model provider.
@@ -353,6 +361,7 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: true,
             supports_websockets: true,
+            supports_image_generation: true,
         }
     }
 
@@ -382,6 +391,7 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            supports_image_generation: false, // SAKRYLLE: no image generation support
         }
     }
 
@@ -412,6 +422,7 @@ impl ModelProviderInfo {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            supports_image_generation: false,
         }
     }
 
@@ -561,6 +572,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        supports_image_generation: false,
     }
 }
 
