@@ -1347,21 +1347,30 @@ async fn run_ratatui_app(
                 let mut selected: usize = 0;
 
                 crossterm::terminal::enable_raw_mode().ok();
-                let _ = crossterm::execute!(std::io::stderr(), crossterm::cursor::Hide);
 
-                // Initial draw
-                eprintln!();
-                eprintln!("  Welcome to Sakrylle CLI");
-                eprintln!();
-                eprintln!("  No credentials found. Would you like to login?");
-                eprintln!();
-                for (i, option) in options.iter().enumerate() {
-                    if i == selected {
-                        eprintln!("  \x1b[36m› {}\x1b[0m", option);
-                    } else {
-                        eprintln!("    {}", option);
+                fn draw_prompt(selected: usize, options: &[&str]) {
+                    let _ = crossterm::execute!(
+                        std::io::stderr(),
+                        crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+                        crossterm::cursor::MoveTo(0, 0)
+                    );
+                    eprintln!();
+                    eprintln!("  Welcome to Sakrylle CLI");
+                    eprintln!();
+                    eprintln!("  No credentials found. Would you like to login?");
+                    eprintln!();
+                    for (i, option) in options.iter().enumerate() {
+                        if i == selected {
+                            eprintln!("  > {}", option);
+                        } else {
+                            eprintln!("    {}", option);
+                        }
                     }
+                    eprintln!();
+                    eprintln!("  (Use arrow keys to select, Enter to confirm)");
                 }
+
+                draw_prompt(selected, &options);
 
                 loop {
                     if let Ok(Event::Key(key)) = event::read() {
@@ -1380,30 +1389,17 @@ async fn run_ratatui_app(
                                 }
                                 _ => continue,
                             }
-                            // Redraw options
-                            let _ = crossterm::execute!(
-                                std::io::stderr(),
-                                crossterm::cursor::MoveUp(options.len() as u16)
-                            );
-                            for (i, option) in options.iter().enumerate() {
-                                let _ = crossterm::execute!(
-                                    std::io::stderr(),
-                                    crossterm::cursor::MoveToColumn(0),
-                                    crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine)
-                                );
-                                if i == selected {
-                                    eprintln!("  \x1b[36m› {}\x1b[0m", option);
-                                } else {
-                                    eprintln!("    {}", option);
-                                }
-                            }
+                            draw_prompt(selected, &options);
                         }
                     }
                 }
 
-                let _ = crossterm::execute!(std::io::stderr(), crossterm::cursor::Show);
                 crossterm::terminal::disable_raw_mode().ok();
-                eprintln!();
+                let _ = crossterm::execute!(
+                    std::io::stderr(),
+                    crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+                    crossterm::cursor::MoveTo(0, 0)
+                );
 
                 if selected == 0 {
                     eprintln!("  Opening browser for login...");
