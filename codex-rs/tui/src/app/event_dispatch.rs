@@ -307,6 +307,18 @@ impl App {
                 }
                 return Ok(self.handle_exit_mode(app_server, mode).await);
             }
+            AppEvent::Login => {
+                // SAKRYLLE: Trigger OIDC login flow
+                self.chat_widget
+                    .add_info_message("Opening browser for Sakrylle login...".to_string(), None);
+                // The actual login is handled by the CLI `sakrylle login` command.
+                // In TUI mode, we prompt the user to run it externally.
+                self.chat_widget.add_info_message(
+                    "Please run `sakrylle login` in another terminal to complete authentication."
+                        .to_string(),
+                    None,
+                );
+            }
             AppEvent::Logout => match app_server.logout_account().await {
                 Ok(()) => {
                     self.show_shutdown_feedback(tui)?;

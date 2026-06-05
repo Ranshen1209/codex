@@ -223,6 +223,9 @@ pub(crate) enum AppEvent {
     /// background tasks, rollout flush, or child process cleanup).
     Exit(ExitMode),
 
+    /// Request app-server account login (OIDC flow).
+    Login,
+
     /// Request app-server account logout, then exit after it succeeds.
     Logout,
 

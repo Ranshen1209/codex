@@ -1962,9 +1962,18 @@ fn should_show_onboarding(
 }
 
 fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {
-    // Only show the login screen for providers that actually require OpenAI auth
-    // (OpenAI or equivalents). For OSS/other providers, skip login entirely.
+    // SAKRYLLE: Show login screen for Sakrylle provider when not authenticated
+    // (no API key env var and no OAuth token in auth.json).
     if !config.model_provider.requires_openai_auth {
+        // For Sakrylle provider, show login if no API key is configured
+        if config.model_provider.env_key.is_some() {
+            // Check if the API key env var is set
+            let env_key = config.model_provider.env_key.as_ref().unwrap();
+            if std::env::var(env_key).ok().filter(|v| !v.trim().is_empty()).is_none() {
+                // No API key set, show login screen
+                return login_status == LoginStatus::NotAuthenticated;
+            }
+        }
         return false;
     }
 
