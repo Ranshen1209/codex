@@ -92,7 +92,9 @@ pub(crate) fn resolve_provider_auth(
 fn bearer_auth_for_provider(
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<Option<BearerAuthProvider>> {
-    if let Some(api_key) = provider.api_key()? {
+    // SAKRYLLE: If env_key is set but env var is missing, return None
+    // to allow fallback to OAuth token from auth.json.
+    if let Some(api_key) = provider.api_key().ok().flatten() {
         return Ok(Some(BearerAuthProvider::new(api_key)));
     }
 
