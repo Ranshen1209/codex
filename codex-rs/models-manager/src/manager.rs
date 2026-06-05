@@ -321,18 +321,21 @@ impl OpenAiModelsManager {
 
     /// Replace the cached remote models and rebuild the derived presets list.
     async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
+        // SAKRYLLE: Treat server-returned models as List visibility by default
+        // (server may not send visibility field, which defaults to None).
+        let mut models = models;
+        for model in models.iter_mut() {
+            if model.visibility == ModelVisibility::None {
+                model.visibility = ModelVisibility::List;
+            }
+        }
+
         // Use the remote models list as the source of truth if it contains at least one
-        // non-hidden model and the user is using ChatGPT auth.
+        // non-hidden model. Always prefer server models over bundled defaults.
         let should_use_remote_models_only = !models.is_empty()
             && models
                 .iter()
-                .any(|model| model.visibility == ModelVisibility::List)
-            && self.auth_manager.as_ref().is_some_and(|auth_manager| {
-                matches!(
-                    auth_manager.auth_mode(),
-                    Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens)
-                )
-            });
+                .any(|model| model.visibility == ModelVisibility::List);
         if should_use_remote_models_only {
             *self.remote_models.write().await = models;
             return;
