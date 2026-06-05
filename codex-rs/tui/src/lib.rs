@@ -1313,6 +1313,73 @@ async fn run_ratatui_app(
 
     tooltips::announcement::prewarm();
 
+    // SAKRYLLE: Check for credentials BEFORE TUI initialization
+    // (TUI puts terminal in raw mode which blocks stdin reads)
+    if !initial_config.model_provider.requires_openai_auth
+        && initial_config.model_provider.env_key.is_some()
+    {
+        let env_key = initial_config.model_provider.env_key.as_ref().unwrap();
+        let has_api_key = std::env::var(env_key)
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .is_some();
+
+        if !has_api_key {
+            let codex_home = codex_utils_home_dir::find_codex_home()
+                .unwrap_or_else(|_| {
+                    let mut p = dirs::home_dir().unwrap_or_default();
+                    p.push(".sakrylle-cli");
+                    codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(p)
+                        .unwrap()
+                });
+            let auth_file = codex_home.join("auth.json");
+            let has_oauth_token = auth_file.exists()
+                && std::fs::read_to_string(&auth_file)
+                    .ok()
+                    .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                    .and_then(|v| v.get("tokens").cloned())
+                    .is_some();
+
+            if !has_oauth_token {
+                eprintln!();
+                eprintln!("  Welcome to Sakrylle CLI");
+                eprintln!();
+                eprintln!("  No credentials found. Would you like to login?");
+                eprintln!();
+                eprintln!("  [Y] Yes, open browser to login");
+                eprintln!("  [N] No, continue without login");
+                eprintln!();
+                eprint!("  > ");
+
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).ok();
+
+                if input.trim().to_lowercase() == "y" || input.trim().is_empty() {
+                    let exe = std::env::current_exe()
+                        .unwrap_or_else(|_| "sakrylle".into());
+
+                    match std::process::Command::new(&exe)
+                        .arg("login")
+                        .status()
+                    {
+                        Ok(status) if status.success() => {
+                            eprintln!("Login successful! Please restart Sakrylle CLI.");
+                            std::process::exit(0);
+                        }
+                        Ok(status) => {
+                            eprintln!("Login failed with status: {status}");
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to start login: {e}");
+                        }
+                    }
+                } else {
+                    eprintln!("Continuing without login. Use /login to login later.");
+                }
+            }
+        }
+    }
+
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
     // Chain to the previous hook so users still get a rich panic report
@@ -1405,72 +1472,6 @@ async fn run_ratatui_app(
         };
         get_login_status(app_server, &initial_config).await?
     } else {
-        // SAKRYLLE: Auto-trigger OIDC login if no API key and no OAuth token
-        if !initial_config.model_provider.requires_openai_auth
-            && initial_config.model_provider.env_key.is_some()
-        {
-            let env_key = initial_config.model_provider.env_key.as_ref().unwrap();
-            let has_api_key = std::env::var(env_key)
-                .ok()
-                .filter(|v| !v.trim().is_empty())
-                .is_some();
-
-            if !has_api_key {
-                // Check if we have an OAuth token in auth.json
-                let codex_home = codex_utils_home_dir::find_codex_home()
-                    .unwrap_or_else(|_| {
-                        let mut p = dirs::home_dir().unwrap_or_default();
-                        p.push(".sakrylle-cli");
-                        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(p)
-                            .unwrap()
-                    });
-                let auth_file = codex_home.join("auth.json");
-                let has_oauth_token = auth_file.exists()
-                    && std::fs::read_to_string(&auth_file)
-                        .ok()
-                        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
-                        .and_then(|v| v.get("tokens").cloned())
-                        .is_some();
-
-                if !has_oauth_token {
-                    // Show login prompt
-                    eprintln!();
-                    eprintln!("  Welcome to Sakrylle CLI");
-                    eprintln!();
-                    eprintln!("  No credentials found. Would you like to login?");
-                    eprintln!();
-                    eprintln!("  [Y] Yes, open browser to login");
-                    eprintln!("  [N] No, continue without login");
-                    eprintln!();
-
-                    let mut input = String::new();
-                    std::io::stdin().read_line(&mut input).ok();
-
-                    if input.trim().to_lowercase() == "y" || input.trim().is_empty() {
-                        let exe = std::env::current_exe()
-                            .unwrap_or_else(|_| "sakrylle".into());
-
-                        match std::process::Command::new(&exe)
-                            .arg("login")
-                            .status()
-                        {
-                            Ok(status) if status.success() => {
-                                eprintln!("Login successful! Restarting...");
-                                std::process::exit(0);
-                            }
-                            Ok(status) => {
-                                eprintln!("Login failed with status: {status}");
-                            }
-                            Err(e) => {
-                                eprintln!("Failed to start login: {e}");
-                            }
-                        }
-                    } else {
-                        eprintln!("Continuing without login. Use /login to login later.");
-                    }
-                }
-            }
-        }
         LoginStatus::NotAuthenticated
     };
     let should_show_onboarding =
