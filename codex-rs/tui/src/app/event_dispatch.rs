@@ -308,14 +308,43 @@ impl App {
                 return Ok(self.handle_exit_mode(app_server, mode).await);
             }
             AppEvent::Login => {
-                // SAKRYLLE: Trigger OIDC login flow
+                // SAKRYLLE: Trigger OIDC login flow by spawning sakrylle login
                 self.chat_widget
-                    .add_info_message("Opening browser for Sakrylle login...".to_string(), None);
-                // The actual login is handled by the CLI `sakrylle login` command.
-                // In TUI mode, we prompt the user to run it externally.
+                    .add_info_message("Starting Sakrylle login...".to_string(), None);
+
+                // Find the sakrylle binary path
+                let exe = std::env::current_exe()
+                    .unwrap_or_else(|_| "sakrylle".into());
+
+                // Spawn login process
+                match std::process::Command::new(&exe)
+                    .arg("login")
+                    .spawn()
+                {
+                    Ok(mut child) => {
+                        self.chat_widget.add_info_message(
+                            "Browser opened for authentication. Complete login in browser, then return here."
+                                .to_string(),
+                            None,
+                        );
+                        // Wait for login to complete in background
+                        let tx = self.app_event_tx.clone();
+                        tokio::spawn(async move {
+                            let _ = child.wait();
+                            // Notify that login attempt finished
+                            tx.send(AppEvent::LoginCompleted);
+                        });
+                    }
+                    Err(e) => {
+                        self.chat_widget.add_error_message(
+                            format!("Failed to start login: {e}")
+                        );
+                    }
+                }
+            }
+            AppEvent::LoginCompleted => {
                 self.chat_widget.add_info_message(
-                    "Please run `sakrylle login` in another terminal to complete authentication."
-                        .to_string(),
+                    "Login process finished. Use /status to check authentication.".to_string(),
                     None,
                 );
             }
