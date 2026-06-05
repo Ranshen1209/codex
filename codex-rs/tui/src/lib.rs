@@ -1472,7 +1472,42 @@ async fn run_ratatui_app(
         };
         get_login_status(app_server, &initial_config).await?
     } else {
-        LoginStatus::NotAuthenticated
+        // SAKRYLLE: Check if credentials exist (API key or OAuth token)
+        let has_credentials = if initial_config.model_provider.env_key.is_some() {
+            let env_key = initial_config.model_provider.env_key.as_ref().unwrap();
+            std::env::var(env_key)
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .is_some()
+        } else {
+            false
+        };
+
+        if !has_credentials {
+            // Check for OAuth token in auth.json
+            let codex_home = codex_utils_home_dir::find_codex_home()
+                .unwrap_or_else(|_| {
+                    let mut p = dirs::home_dir().unwrap_or_default();
+                    p.push(".sakrylle-cli");
+                    codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(p)
+                        .unwrap()
+                });
+            let auth_file = codex_home.join("auth.json");
+            let has_oauth_token = auth_file.exists()
+                && std::fs::read_to_string(&auth_file)
+                    .ok()
+                    .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                    .and_then(|v| v.get("tokens").cloned())
+                    .is_some();
+
+            if has_oauth_token {
+                LoginStatus::AuthMode(codex_app_server_protocol::AuthMode::Chatgpt)
+            } else {
+                LoginStatus::NotAuthenticated
+            }
+        } else {
+            LoginStatus::AuthMode(codex_app_server_protocol::AuthMode::ApiKey)
+        }
     };
     let should_show_onboarding =
         should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
