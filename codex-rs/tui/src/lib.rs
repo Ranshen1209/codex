@@ -1341,30 +1341,95 @@ async fn run_ratatui_app(
                     .is_some();
 
             if !has_oauth_token {
+                use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+
+                let options = ["Yes, login now", "No, exit"];
+                let mut selected: usize = 0;
+
+                crossterm::terminal::enable_raw_mode().ok();
+                let _ = crossterm::execute!(std::io::stderr(), crossterm::cursor::Hide);
+
+                // Initial draw
                 eprintln!();
                 eprintln!("  Welcome to Sakrylle CLI");
                 eprintln!();
-                eprintln!("  No credentials found. Opening browser for login...");
+                eprintln!("  No credentials found. Would you like to login?");
+                eprintln!();
+                for (i, option) in options.iter().enumerate() {
+                    if i == selected {
+                        eprintln!("  \x1b[36m› {}\x1b[0m", option);
+                    } else {
+                        eprintln!("    {}", option);
+                    }
+                }
+
+                loop {
+                    if let Ok(Event::Key(key)) = event::read() {
+                        if key.kind == KeyEventKind::Press {
+                            match key.code {
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    selected = selected.wrapping_sub(1) % options.len();
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    selected = (selected + 1) % options.len();
+                                }
+                                KeyCode::Enter => break,
+                                KeyCode::Char('q') | KeyCode::Esc => {
+                                    selected = 1;
+                                    break;
+                                }
+                                _ => continue,
+                            }
+                            // Redraw options
+                            let _ = crossterm::execute!(
+                                std::io::stderr(),
+                                crossterm::cursor::MoveUp(options.len() as u16)
+                            );
+                            for (i, option) in options.iter().enumerate() {
+                                let _ = crossterm::execute!(
+                                    std::io::stderr(),
+                                    crossterm::cursor::MoveToColumn(0),
+                                    crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine)
+                                );
+                                if i == selected {
+                                    eprintln!("  \x1b[36m› {}\x1b[0m", option);
+                                } else {
+                                    eprintln!("    {}", option);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let _ = crossterm::execute!(std::io::stderr(), crossterm::cursor::Show);
+                crossterm::terminal::disable_raw_mode().ok();
                 eprintln!();
 
-                let exe = std::env::current_exe()
-                    .unwrap_or_else(|_| "sakrylle".into());
+                if selected == 0 {
+                    eprintln!("  Opening browser for login...");
+                    eprintln!();
 
-                match std::process::Command::new(&exe)
-                    .arg("login")
-                    .status()
-                {
-                    Ok(status) if status.success() => {
-                        eprintln!("  Login successful! Continuing...");
+                    let exe = std::env::current_exe()
+                        .unwrap_or_else(|_| "sakrylle".into());
+
+                    match std::process::Command::new(&exe)
+                        .arg("login")
+                        .status()
+                    {
+                        Ok(status) if status.success() => {
+                            eprintln!("  Login successful! Continuing...");
+                        }
+                        Ok(status) => {
+                            eprintln!("  Login failed with status: {status}");
+                            eprintln!("  You can try again later with: sakrylle login");
+                        }
+                        Err(e) => {
+                            eprintln!("  Failed to start login: {e}");
+                            eprintln!("  You can try again later with: sakrylle login");
+                        }
                     }
-                    Ok(status) => {
-                        eprintln!("  Login failed with status: {status}");
-                        eprintln!("  You can try again later with: sakrylle login");
-                    }
-                    Err(e) => {
-                        eprintln!("  Failed to start login: {e}");
-                        eprintln!("  You can try again later with: sakrylle login");
-                    }
+                } else {
+                    eprintln!("  You can login later with: sakrylle login");
                 }
             }
         }
