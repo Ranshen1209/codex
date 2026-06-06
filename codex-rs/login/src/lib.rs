@@ -3,6 +3,7 @@ pub mod auth_env_telemetry;
 pub mod token_data;
 
 mod device_code_auth;
+mod oidc;
 mod pkce;
 mod server;
 

@@ -2,12 +2,9 @@
 use std::io;
 use std::net::SocketAddr;
 use std::net::TcpListener;
-use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
 use anyhow::Result;
-use base64::Engine;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
@@ -17,7 +14,6 @@ use tempfile::tempdir;
 use url::Url;
 
 const DEFAULT_LOGIN_PORT: u16 = 1455;
-const FALLBACK_LOGIN_PORT: u16 = 1457;
 const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
 const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001";
 const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
@@ -28,55 +24,38 @@ fn start_mock_issuer(chatgpt_account_id: &str) -> (SocketAddr, thread::JoinHandl
     // Bind to a random available port
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let addr = listener.local_addr().unwrap();
+    let issuer = format!("http://{}:{}", addr.ip(), addr.port());
     let server = tiny_http::Server::from_listener(listener, None).unwrap();
     let chatgpt_account_id = chatgpt_account_id.to_string();
 
     let handle = thread::spawn(move || {
         while let Ok(mut req) = server.recv() {
             let url = req.url().to_string();
-            if url.starts_with("/oauth/token") {
-                // Read body
+            if url.starts_with("/.well-known/openid-configuration") {
+                let body = serde_json::json!({
+                    "issuer": issuer,
+                    "authorization_endpoint": format!("{issuer}/oauth/authorize"),
+                    "token_endpoint": format!("{issuer}/oauth/token"),
+                    "jwks_uri": format!("{issuer}/oauth/jwks"),
+                    "code_challenge_methods_supported": ["S256"],
+                    "id_token_signing_alg_values_supported": ["RS256"],
+                });
+                respond_json(req, body);
+            } else if url.starts_with("/oauth/jwks") {
+                respond_json(req, test_jwks_body());
+            } else if url.starts_with("/oauth/token") {
                 let mut body = String::new();
                 let _ = req.as_reader().read_to_string(&mut body);
-                // Build minimal JWT with plan=pro
-                #[derive(serde::Serialize)]
-                struct Header {
-                    alg: &'static str,
-                    typ: &'static str,
-                }
-                let header = Header {
-                    alg: "none",
-                    typ: "JWT",
-                };
-                let payload = serde_json::json!({
-                    "email": "user@example.com",
-                    "https://api.openai.com/auth": {
-                        "chatgpt_plan_type": "pro",
-                        "chatgpt_account_id": chatgpt_account_id,
-                    }
-                });
-                let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
-                let header_bytes = serde_json::to_vec(&header).unwrap();
-                let payload_bytes = serde_json::to_vec(&payload).unwrap();
-                let id_token = format!(
-                    "{}.{}.{}",
-                    b64(&header_bytes),
-                    b64(&payload_bytes),
-                    b64(b"sig")
-                );
-
+                let code = url::form_urlencoded::parse(body.as_bytes())
+                    .find_map(|(key, value)| (key == "code").then(|| value.into_owned()))
+                    .unwrap_or_default();
+                let id_token = signed_id_token(&issuer, &chatgpt_account_id, &code);
                 let tokens = serde_json::json!({
                     "id_token": id_token,
                     "access_token": "access-123",
                     "refresh_token": "refresh-123",
                 });
-                let data = serde_json::to_vec(&tokens).unwrap();
-                let mut resp = tiny_http::Response::from_data(data);
-                resp.add_header(
-                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
-                        .unwrap_or_else(|_| panic!("header bytes")),
-                );
-                let _ = req.respond(resp);
+                respond_json(req, tokens);
             } else {
                 let _ = req
                     .respond(tiny_http::Response::from_string("not found").with_status_code(404));
@@ -86,6 +65,90 @@ fn start_mock_issuer(chatgpt_account_id: &str) -> (SocketAddr, thread::JoinHandl
 
     (addr, handle)
 }
+
+fn respond_json(req: tiny_http::Request, body: serde_json::Value) {
+    let data = serde_json::to_vec(&body).unwrap();
+    let mut resp = tiny_http::Response::from_data(data);
+    resp.add_header(
+        tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+            .unwrap_or_else(|_| panic!("header bytes")),
+    );
+    let _ = req.respond(resp);
+}
+
+fn signed_id_token(issuer: &str, chatgpt_account_id: &str, nonce: &str) -> String {
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+    header.kid = Some("test-key".to_string());
+    let now = chrono::Utc::now().timestamp() as usize;
+    jsonwebtoken::encode(
+        &header,
+        &serde_json::json!({
+            "iss": issuer,
+            "sub": "user-123",
+            "aud": codex_login::CLIENT_ID,
+            "iat": now,
+            "exp": now + 3600,
+            "nonce": nonce,
+            "email": "user@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_plan_type": "pro",
+                "chatgpt_account_id": chatgpt_account_id,
+            }
+        }),
+        &jsonwebtoken::EncodingKey::from_rsa_pem(TEST_RSA_PRIVATE_KEY_PEM).unwrap(),
+    )
+    .unwrap()
+}
+
+fn nonce_from_auth_url(auth_url: &str) -> Result<String> {
+    let auth_url = Url::parse(auth_url)?;
+    auth_url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "nonce").then(|| value.into_owned()))
+        .ok_or_else(|| anyhow::anyhow!("auth URL should include nonce"))
+}
+
+fn test_jwks_body() -> serde_json::Value {
+    serde_json::json!({
+        "keys": [{
+            "kty": "RSA",
+            "kid": "test-key",
+            "use": "sig",
+            "alg": "RS256",
+            "n": "1qQF2MqTrGAMDm7wXbjJP5sWqGA83tAGUs2ksy7iJXLJdhCg4AtwGm4SFl4f6kxhCSzlN1QdXuZjvRT2wZZiGUi9xUE28rf4WLrTxSnwqLuTy5knMP08yC0t_0YU_FGPZMcWb14hG05IvZr8UbmRaVagxSR8H4rSIymRoVwwmFSrqz068XrWGSYNIfLEASyo5GdAaqmk1JALINHgYGQJVxMxtwcvDxoVKmC7eltUNymMNBZhsv4E8sx9YNLpBoEibznfEpDU_DGzrM5eZCsQzaqbhBOlGd427ifud_Nnd9cPqzgCUc23-0FXSPfpbgksCXAwAmD0OFjQWrgqVdKL6Q",
+            "e": "AQAB",
+        }]
+    })
+}
+
+const TEST_RSA_PRIVATE_KEY_PEM: &[u8] = br#"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDWpAXYypOsYAwO
+bvBduMk/mxaoYDze0AZSzaSzLuIlcsl2EKDgC3AabhIWXh/qTGEJLOU3VB1e5mO9
+FPbBlmIZSL3FQTbyt/hYutPFKfCou5PLmScw/TzILS3/RhT8UY9kxxZvXiEbTki9
+mvxRuZFpVqDFJHwfitIjKZGhXDCYVKurPTrxetYZJg0h8sQBLKjkZ0BqqaTUkAsg
+0eBgZAlXEzG3By8PGhUqYLt6W1Q3KYw0FmGy/gTyzH1g0ukGgSJvOd8SkNT8MbOs
+zl5kKxDNqpuEE6UZ3jbuJ+5382d31w+rOAJRzbf7QVdI9+luCSwJcDACYPQ4WNBa
+uCpV0ovpAgMBAAECggEAVu84LwZdqYN9XpswX8VoPYrjMm9IODapWQBRpQFoNyK2
+1ksF3bjEPvA2Azk8U/l7k+vLKw22l6lY3EyRZPcz5GnB8xLm3ogE3mtNOp4yCyVu
+RxhQ91aaN7mU17/a4BdorLi2LYVCg3zBmYociD1Q2AluNGsCmwPu+K7tfR2J0Sg8
+NjqiTbDG1XDpR/icwgC9t6vh8lZpCHDhF4tbQfLLVLeA/OdcuzXDyMCXbmdVIdBQ
+rm4aIFmr2e1/2ctTbCg85S6AGFTH+pSLjrwTzyvf+F6NW5uNjLQAQLFj+EznBDxj
+Xdx90cySrjsKK6PVWQF4RiTvkSW8eWL7R6B2FZbGwQKBgQDuVQRj72hWloR7mbEL
+aUEEv3pIXTMXWEsoMBNczos/1L1RnAN1AI44TurznasPZAWvQj+kVbLDR+TAeZrL
+iA8HIWswQUI18hFmgKzSkwIXGtubcKVrgsKeS4lMDKCM/Ef6WAYdeq6ronoY5lCN
+YrJFmGp81W5zcV7lyiycgbSiGwKBgQDmjWYf6pZjrK7Z+OJ3X1AZfi2vss15SCvL
+3fPgzIDbViztpGyQhc3DQZIsBNIu0xZp/veGce9TEeTds2ro9NfdJFeou8+fC7Pq
+sOsM3amGFFi+ZW/9BWyjZEM88bgWWAjqLHbpfHDxjAf5CSxddqxgHlbP0Ytyb1Vg
+gmPDn9YKSwKBgQDbTi3hC35WFuDHn0/zcSHcDZmnFuOZeqyFyV83yfMGhGrEuqvP
+sPgtRikajJ3IZsB4WZyYSidZXEFY/0z6NjOl2xF38MTNQPbT/FmK1q1Yt2UWrlv5
+BvSwlk87RG9D7C0LZo4R+D7cPoDdgqjiwMvMEIkEX5zn641oI1ZTmWKuuwKBgQCD
+KF+3unnRvHRAVoFnTZbA2fJdqMeRvogD04GhGlYX8V9f1hFY6nXTJaNlXVzA/J8c
+r8ra9kgjJuPfZ+ljG58OFFW2DRohLcQtuHYPfK6rMzoFHqnl9EcIcMp7ijuionR3
+29HOJFgQYgxLFXfit9d6WugiE+BTupiEbckZif13HwKBgE/lAlkVHP6YahOO2Ljc
+J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
+5da0D4h2rYOXnbYIg0BVu4spQbaM6ewsp66b8+MzLOBvj8SzWdt1Oyw0q/MRyQAR
+8U4M2TSWCKUY/A6sT4W8+mT9
+-----END PRIVATE KEY-----"#;
 
 #[tokio::test]
 async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
@@ -129,7 +192,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         forced_chatgpt_workspace_id: Some(vec![chatgpt_account_id.to_string()]),
         codex_streamlined_login: false,
     };
-    let server = run_login_server(opts)?;
+    let server = run_login_server(opts).await?;
     assert!(
         server
             .auth_url
@@ -137,12 +200,13 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         "auth URL should include forced workspace parameter"
     );
     let login_port = server.actual_port;
+    let nonce = nonce_from_auth_url(&server.auth_url)?;
 
     // Simulate browser callback, and follow redirect to /success
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()?;
-    let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=test_state_123");
+    let url = format!("http://127.0.0.1:{login_port}/auth/callback?code={nonce}&state=test_state_123");
     let resp = client.get(&url).send().await?;
     assert!(resp.status().is_success());
 
@@ -153,10 +217,10 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     let auth_path = codex_home.join("auth.json");
     let data = std::fs::read_to_string(&auth_path)?;
     let json: serde_json::Value = serde_json::from_str(&data)?;
-    // The following assert is here because of the old oauth flow that exchanges tokens for an
-    // API key. See obtain_api_key in server.rs for details. Once we remove this old mechanism
-    // from the code, this test should be updated to expect that the API key is no longer present.
-    assert_eq!(json["OPENAI_API_KEY"], "access-123");
+    assert!(
+        json.get("OPENAI_API_KEY").is_none_or(serde_json::Value::is_null),
+        "OIDC login should not persist an API-key alias"
+    );
     assert_eq!(json["tokens"]["access_token"], "access-123");
     assert_eq!(json["tokens"]["refresh_token"], "refresh-123");
     assert_eq!(json["tokens"]["account_id"], chatgpt_account_id);
@@ -191,11 +255,12 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
     };
-    let server = run_login_server(opts)?;
+    let server = run_login_server(opts).await?;
     let login_port = server.actual_port;
+    let nonce = nonce_from_auth_url(&server.auth_url)?;
 
     let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=state2");
+    let url = format!("http://127.0.0.1:{login_port}/auth/callback?code={nonce}&state=state2");
     let resp = client.get(&url).send().await?;
     assert!(resp.status().is_success());
 
@@ -234,7 +299,7 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
         ]),
         codex_streamlined_login: false,
     };
-    let server = run_login_server(opts)?;
+    let server = run_login_server(opts).await?;
     let auth_url = Url::parse(&server.auth_url)?;
     let allowed_workspace_ids = auth_url
         .query_pairs()
@@ -272,7 +337,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
         forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         codex_streamlined_login: false,
     };
-    let server = run_login_server(opts)?;
+    let server = run_login_server(opts).await?;
     assert!(
         server
             .auth_url
@@ -280,9 +345,10 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
         "auth URL should include forced workspace parameter"
     );
     let login_port = server.actual_port;
+    let nonce = nonce_from_auth_url(&server.auth_url)?;
 
     let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state={state}");
+    let url = format!("http://127.0.0.1:{login_port}/auth/callback?code={nonce}&state={state}");
     let resp = client.get(&url).send().await?;
     assert!(resp.status().is_success());
     let body = resp.text().await?;
@@ -332,7 +398,7 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
     };
-    let server = run_login_server(opts)?;
+    let server = run_login_server(opts).await?;
     let login_port = server.actual_port;
 
     let client = reqwest::Client::new();
@@ -343,8 +409,8 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
     assert!(resp.status().is_success());
     let body = resp.text().await?;
     assert!(
-        body.contains("You do not have access to Codex"),
-        "error body should clearly explain the Codex access denial"
+        body.contains("Sakrylle is not enabled for your workspace"),
+        "error body should clearly explain the Sakrylle access denial"
     );
     assert!(
         body.contains("Contact your workspace administrator"),
@@ -400,7 +466,7 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
     };
-    let server = run_login_server(opts)?;
+    let server = run_login_server(opts).await?;
     let login_port = server.actual_port;
 
     let client = reqwest::Client::new();
@@ -419,7 +485,7 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
         "generic oauth denial should preserve the oauth error details"
     );
     assert!(
-        body.contains("Return to Codex to retry"),
+        body.contains("Return to the terminal and try again"),
         "generic oauth denial should keep the generic help text"
     );
     assert!(
@@ -431,11 +497,11 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
         "generic oauth denial should include the oauth error description"
     );
     assert!(
-        !body.contains("You do not have access to Codex"),
+        !body.contains("Sakrylle is not enabled for your workspace"),
         "generic oauth denial should not show the entitlement-specific title"
     );
     assert!(
-        !body.contains("get access to Codex"),
+        !body.contains("request access to Sakrylle"),
         "generic oauth denial should not show the entitlement-specific admin guidance"
     );
 
@@ -459,17 +525,8 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() -> Result<()> {
+async fn uses_random_port_when_default_port_is_in_use() -> Result<()> {
     skip_if_no_network!(Ok(()));
-
-    match TcpListener::bind(("127.0.0.1", FALLBACK_LOGIN_PORT)) {
-        Ok(listener) => drop(listener),
-        Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-            eprintln!("Skipping test because 127.0.0.1:{FALLBACK_LOGIN_PORT} is already in use");
-            return Ok(());
-        }
-        Err(err) => return Err(err.into()),
-    }
 
     let default_port_listener = match TcpListener::bind(("127.0.0.1", DEFAULT_LOGIN_PORT)) {
         Ok(listener) => listener,
@@ -478,16 +535,6 @@ async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() ->
             return Ok(());
         }
         Err(err) => return Err(err.into()),
-    };
-    let default_port_server =
-        Arc::new(tiny_http::Server::from_listener(default_port_listener, None).unwrap());
-    let default_port_server_handle = {
-        let server = default_port_server.clone();
-        thread::spawn(move || {
-            while let Ok(req) = server.recv() {
-                let _ = req.respond(tiny_http::Response::from_string("not codex"));
-            }
-        })
     };
 
     let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
@@ -502,88 +549,60 @@ async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() ->
     );
     opts.issuer = issuer;
     opts.open_browser = false;
-    opts.force_state = Some("fallback_state".to_string());
+    opts.force_state = Some("random_port_state".to_string());
 
-    let server_result = run_login_server(opts);
-    default_port_server.unblock();
-    let _ = default_port_server_handle.join();
-
-    let server = server_result?;
+    let server = run_login_server(opts).await?;
     let actual_port = server.actual_port;
     let auth_url = server.auth_url.clone();
     server.cancel();
-    let _ = tokio::time::timeout(Duration::from_secs(2), server.block_until_done())
-        .await
-        .expect("login server should shut down after cancel");
+    let _ = server.block_until_done().await;
+    drop(default_port_listener);
 
-    assert_eq!(actual_port, FALLBACK_LOGIN_PORT);
+    assert_ne!(actual_port, DEFAULT_LOGIN_PORT);
     assert!(auth_url.contains(&format!(
-        "redirect_uri=http%3A%2F%2Flocalhost%3A{FALLBACK_LOGIN_PORT}%2Fauth%2Fcallback"
+        "redirect_uri=http%3A%2F%2F127.0.0.1%3A{actual_port}%2Fcallback"
     )));
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
+async fn ignores_requested_port_and_uses_random_available_port() -> Result<()> {
     skip_if_no_network!(Ok(()));
+
+    let requested_port_listener = match TcpListener::bind(("127.0.0.1", DEFAULT_LOGIN_PORT)) {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
+            eprintln!("Skipping test because 127.0.0.1:{DEFAULT_LOGIN_PORT} is already in use");
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
+    };
 
     let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
-    let first_tmp = tempdir()?;
-    let first_codex_home = first_tmp.path().to_path_buf();
-
-    let first_opts = ServerOptions {
-        codex_home: first_codex_home,
-        cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        client_id: codex_login::CLIENT_ID.to_string(),
-        issuer: issuer.clone(),
-        port: 0,
-        open_browser: false,
-        force_state: Some("cancel_state".to_string()),
-        forced_chatgpt_workspace_id: None,
-        codex_streamlined_login: false,
-    };
-
-    let first_server = run_login_server(first_opts)?;
-    let login_port = first_server.actual_port;
-    let first_server_task = tokio::spawn(async move { first_server.block_until_done().await });
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let second_tmp = tempdir()?;
-    let second_codex_home = second_tmp.path().to_path_buf();
-
-    let second_opts = ServerOptions {
-        codex_home: second_codex_home,
+    let tmp = tempdir()?;
+    let mut opts = ServerOptions {
+        codex_home: tmp.path().to_path_buf(),
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         client_id: codex_login::CLIENT_ID.to_string(),
         issuer,
-        port: login_port,
+        port: DEFAULT_LOGIN_PORT,
         open_browser: false,
-        force_state: Some("cancel_state_2".to_string()),
+        force_state: Some("requested_port_state".to_string()),
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
     };
 
-    let second_server = run_login_server(second_opts)?;
-    assert_eq!(second_server.actual_port, login_port);
+    let server = run_login_server(opts.clone()).await?;
+    assert_ne!(server.actual_port, DEFAULT_LOGIN_PORT);
+    assert_ne!(server.actual_port, opts.port);
 
-    let cancel_result = first_server_task
-        .await
-        .expect("first login server task panicked")
-        .expect_err("login server should report cancellation");
-    assert_eq!(cancel_result.kind(), io::ErrorKind::Interrupted);
+    opts.port = 0;
+    server.cancel();
+    let _ = server.block_until_done().await;
+    drop(requested_port_listener);
 
-    let client = reqwest::Client::new();
-    let cancel_url = format!("http://127.0.0.1:{login_port}/cancel");
-    let resp = client.get(cancel_url).send().await?;
-    assert!(resp.status().is_success());
-
-    second_server
-        .block_until_done()
-        .await
-        .expect_err("second login server should report cancellation");
     Ok(())
 }

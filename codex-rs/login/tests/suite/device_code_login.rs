@@ -1,12 +1,14 @@
 #![allow(clippy::unwrap_used)]
 
 use anyhow::Context;
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::ServerOptions;
 use codex_login::auth::load_auth_dot_json;
 use codex_login::run_device_code_login;
+use core_test_support::skip_if_no_network;
+use jsonwebtoken::Algorithm;
+use jsonwebtoken::EncodingKey;
+use jsonwebtoken::Header;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -19,59 +21,86 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-use core_test_support::skip_if_no_network;
-
-// ---------- Small helpers  ----------
-
 const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
 const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
 
-fn make_jwt(payload: serde_json::Value) -> String {
-    let header = json!({ "alg": "none", "typ": "JWT" });
-    let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap());
-    let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
-    let signature_b64 = URL_SAFE_NO_PAD.encode(b"sig");
-    format!("{header_b64}.{payload_b64}.{signature_b64}")
-}
-
-async fn mock_usercode_success(server: &MockServer) {
-    Mock::given(method("POST"))
-        .and(path("/api/accounts/deviceauth/usercode"))
+async fn mock_discovery(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-configuration"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "device_auth_id": "device-auth-123",
-            "user_code": "CODE-12345",
-            // NOTE: Interval is kept 0 in order to avoid waiting for the interval to pass
-            "interval": "0"
+            "issuer": server.uri(),
+            "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
+            "token_endpoint": format!("{}/oauth/token", server.uri()),
+            "jwks_uri": format!("{}/oauth/jwks", server.uri()),
+            "device_authorization_endpoint": format!("{}/oauth/device/code", server.uri()),
+            "code_challenge_methods_supported": ["S256"],
+            "id_token_signing_alg_values_supported": ["RS256"],
         })))
         .mount(server)
         .await;
 }
 
-async fn mock_usercode_failure(server: &MockServer, status: u16) {
+async fn mock_jwks(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/oauth/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(test_jwks_body()))
+        .mount(server)
+        .await;
+}
+
+async fn mock_device_code_success(server: &MockServer) {
     Mock::given(method("POST"))
-        .and(path("/api/accounts/deviceauth/usercode"))
+        .and(path("/oauth/device/code"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "device_code": "device-code-123",
+            "user_code": "CODE-12345",
+            "verification_uri": format!("{}/activate", server.uri()),
+            "interval": "0",
+        })))
+        .mount(server)
+        .await;
+}
+
+async fn mock_device_code_failure(server: &MockServer, status: u16) {
+    Mock::given(method("POST"))
+        .and(path("/oauth/device/code"))
         .respond_with(ResponseTemplate::new(status))
         .mount(server)
         .await;
 }
 
-async fn mock_poll_token_two_step(
+async fn mock_token_success(server: &MockServer, jwt: String) {
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id_token": jwt,
+            "access_token": "access-token-123",
+            "refresh_token": "refresh-token-123",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        })))
+        .mount(server)
+        .await;
+}
+
+async fn mock_token_sequence(
     server: &MockServer,
     counter: Arc<AtomicUsize>,
-    first_response_status: u16,
+    first_response: ResponseTemplate,
+    jwt: String,
 ) {
     let c = counter.clone();
     Mock::given(method("POST"))
-        .and(path("/api/accounts/deviceauth/token"))
+        .and(path("/oauth/token"))
         .respond_with(move |_: &Request| {
             let attempt = c.fetch_add(1, Ordering::SeqCst);
             if attempt == 0 {
-                ResponseTemplate::new(first_response_status)
+                first_response.clone()
             } else {
                 ResponseTemplate::new(200).set_body_json(json!({
-                    "authorization_code": "poll-code-321",
-                    "code_challenge": "code-challenge-321",
-                    "code_verifier": "code-verifier-321"
+                    "id_token": jwt,
+                    "access_token": "access-token-123",
+                    "refresh_token": "refresh-token-123",
                 }))
             }
         })
@@ -80,21 +109,12 @@ async fn mock_poll_token_two_step(
         .await;
 }
 
-async fn mock_poll_token_single(server: &MockServer, endpoint: &str, response: ResponseTemplate) {
-    Mock::given(method("POST"))
-        .and(path(endpoint))
-        .respond_with(response)
-        .mount(server)
-        .await;
-}
-
-async fn mock_oauth_token_single(server: &MockServer, jwt: String) {
+async fn mock_token_error(server: &MockServer, status: u16, error: &str, description: &str) {
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id_token": jwt.clone(),
-            "access_token": "access-token-123",
-            "refresh_token": "refresh-token-123"
+        .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+            "error": error,
+            "error_description": description,
         })))
         .mount(server)
         .await;
@@ -107,7 +127,7 @@ fn server_opts(
 ) -> ServerOptions {
     let mut opts = ServerOptions::new(
         codex_home.path().to_path_buf(),
-        "client-id".to_string(),
+        codex_login::CLIENT_ID.to_string(),
         /*forced_chatgpt_workspace_id*/ None,
         cli_auth_credentials_store_mode,
     );
@@ -116,41 +136,98 @@ fn server_opts(
     opts
 }
 
+fn signed_id_token(issuer: &str, chatgpt_account_id: Option<&str>) -> String {
+    let mut header = Header::new(Algorithm::RS256);
+    header.kid = Some("test-key".to_string());
+    let now = chrono::Utc::now().timestamp() as usize;
+    let mut claims = json!({
+        "iss": issuer,
+        "sub": "user-123",
+        "aud": codex_login::CLIENT_ID,
+        "iat": now,
+        "exp": now + 3600,
+        "email": "user@example.com",
+    });
+    if let Some(chatgpt_account_id) = chatgpt_account_id {
+        claims["https://api.openai.com/auth"] = json!({
+            "chatgpt_plan_type": "pro",
+            "chatgpt_account_id": chatgpt_account_id,
+        });
+    }
+
+    jsonwebtoken::encode(
+        &header,
+        &claims,
+        &EncodingKey::from_rsa_pem(TEST_RSA_PRIVATE_KEY_PEM).unwrap(),
+    )
+    .unwrap()
+}
+
+fn test_jwks_body() -> serde_json::Value {
+    json!({
+        "keys": [{
+            "kty": "RSA",
+            "kid": "test-key",
+            "use": "sig",
+            "alg": "RS256",
+            "n": "1qQF2MqTrGAMDm7wXbjJP5sWqGA83tAGUs2ksy7iJXLJdhCg4AtwGm4SFl4f6kxhCSzlN1QdXuZjvRT2wZZiGUi9xUE28rf4WLrTxSnwqLuTy5knMP08yC0t_0YU_FGPZMcWb14hG05IvZr8UbmRaVagxSR8H4rSIymRoVwwmFSrqz068XrWGSYNIfLEASyo5GdAaqmk1JALINHgYGQJVxMxtwcvDxoVKmC7eltUNymMNBZhsv4E8sx9YNLpBoEibznfEpDU_DGzrM5eZCsQzaqbhBOlGd427ifud_Nnd9cPqzgCUc23-0FXSPfpbgksCXAwAmD0OFjQWrgqVdKL6Q",
+            "e": "AQAB",
+        }]
+    })
+}
+
+const TEST_RSA_PRIVATE_KEY_PEM: &[u8] = br#"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDWpAXYypOsYAwO
+bvBduMk/mxaoYDze0AZSzaSzLuIlcsl2EKDgC3AabhIWXh/qTGEJLOU3VB1e5mO9
+FPbBlmIZSL3FQTbyt/hYutPFKfCou5PLmScw/TzILS3/RhT8UY9kxxZvXiEbTki9
+mvxRuZFpVqDFJHwfitIjKZGhXDCYVKurPTrxetYZJg0h8sQBLKjkZ0BqqaTUkAsg
+0eBgZAlXEzG3By8PGhUqYLt6W1Q3KYw0FmGy/gTyzH1g0ukGgSJvOd8SkNT8MbOs
+zl5kKxDNqpuEE6UZ3jbuJ+5382d31w+rOAJRzbf7QVdI9+luCSwJcDACYPQ4WNBa
+uCpV0ovpAgMBAAECggEAVu84LwZdqYN9XpswX8VoPYrjMm9IODapWQBRpQFoNyK2
+1ksF3bjEPvA2Azk8U/l7k+vLKw22l6lY3EyRZPcz5GnB8xLm3ogE3mtNOp4yCyVu
+RxhQ91aaN7mU17/a4BdorLi2LYVCg3zBmYociD1Q2AluNGsCmwPu+K7tfR2J0Sg8
+NjqiTbDG1XDpR/icwgC9t6vh8lZpCHDhF4tbQfLLVLeA/OdcuzXDyMCXbmdVIdBQ
+rm4aIFmr2e1/2ctTbCg85S6AGFTH+pSLjrwTzyvf+F6NW5uNjLQAQLFj+EznBDxj
+Xdx90cySrjsKK6PVWQF4RiTvkSW8eWL7R6B2FZbGwQKBgQDuVQRj72hWloR7mbEL
+aUEEv3pIXTMXWEsoMBNczos/1L1RnAN1AI44TurznasPZAWvQj+kVbLDR+TAeZrL
+iA8HIWswQUI18hFmgKzSkwIXGtubcKVrgsKeS4lMDKCM/Ef6WAYdeq6ronoY5lCN
+YrJFmGp81W5zcV7lyiycgbSiGwKBgQDmjWYf6pZjrK7Z+OJ3X1AZfi2vss15SCvL
+3fPgzIDbViztpGyQhc3DQZIsBNIu0xZp/veGce9TEeTds2ro9NfdJFeou8+fC7Pq
+sOsM3amGFFi+ZW/9BWyjZEM88bgWWAjqLHbpfHDxjAf5CSxddqxgHlbP0Ytyb1Vg
+gmPDn9YKSwKBgQDbTi3hC35WFuDHn0/zcSHcDZmnFuOZeqyFyV83yfMGhGrEuqvP
+sPgtRikajJ3IZsB4WZyYSidZXEFY/0z6NjOl2xF38MTNQPbT/FmK1q1Yt2UWrlv5
+BvSwlk87RG9D7C0LZo4R+D7cPoDdgqjiwMvMEIkEX5zn641oI1ZTmWKuuwKBgQCD
+KF+3unnRvHRAVoFnTZbA2fJdqMeRvogD04GhGlYX8V9f1hFY6nXTJaNlXVzA/J8c
+r8ra9kgjJuPfZ+ljG58OFFW2DRohLcQtuHYPfK6rMzoFHqnl9EcIcMp7ijuionR3
+29HOJFgQYgxLFXfit9d6WugiE+BTupiEbckZif13HwKBgE/lAlkVHP6YahOO2Ljc
+J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
+5da0D4h2rYOXnbYIg0BVu4spQbaM6ewsp66b8+MzLOBvj8SzWdt1Oyw0q/MRyQAR
+8U4M2TSWCKUY/A6sT4W8+mT9
+-----END PRIVATE KEY-----"#;
+
 #[tokio::test]
 async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let codex_home = tempdir().unwrap();
+    let codex_home = tempdir()?;
     let mock_server = MockServer::start().await;
+    mock_discovery(&mock_server).await;
+    mock_jwks(&mock_server).await;
+    mock_device_code_success(&mock_server).await;
+    let jwt = signed_id_token(&mock_server.uri(), Some(WORKSPACE_ID_ALLOWED));
+    mock_token_success(&mock_server, jwt.clone()).await;
 
-    mock_usercode_success(&mock_server).await;
+    run_device_code_login(server_opts(
+        &codex_home,
+        mock_server.uri(),
+        AuthCredentialsStoreMode::File,
+    ))
+    .await
+    .expect("device code login integration should succeed");
 
-    mock_poll_token_two_step(
-        &mock_server,
-        Arc::new(AtomicUsize::new(0)),
-        /*first_response_status*/ 404,
-    )
-    .await;
-
-    let jwt = make_jwt(json!({
-        "https://api.openai.com/auth": {
-            "chatgpt_account_id": WORKSPACE_ID_ALLOWED
-        }
-    }));
-
-    mock_oauth_token_single(&mock_server, jwt.clone()).await;
-
-    let issuer = mock_server.uri();
-    let opts = server_opts(&codex_home, issuer, AuthCredentialsStoreMode::File);
-
-    run_device_code_login(opts)
-        .await
-        .expect("device code login integration should succeed");
-
-    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
-        .context("auth.json should load after login succeeds")?
+    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)?
         .context("auth.json written")?;
-    // assert_eq!(auth.openai_api_key.as_deref(), Some("api-key-321"));
+    assert!(auth.openai_api_key.is_none());
     let tokens = auth.tokens.expect("tokens persisted");
     assert_eq!(tokens.access_token, "access-token-123");
     assert_eq!(tokens.refresh_token, "refresh-token-123");
@@ -163,29 +240,19 @@ async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
 async fn device_code_login_rejects_workspace_mismatch() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let codex_home = tempdir().unwrap();
+    let codex_home = tempdir()?;
     let mock_server = MockServer::start().await;
+    mock_discovery(&mock_server).await;
+    mock_jwks(&mock_server).await;
+    mock_device_code_success(&mock_server).await;
+    let jwt = signed_id_token(&mock_server.uri(), Some(WORKSPACE_ID_DISALLOWED));
+    mock_token_success(&mock_server, jwt).await;
 
-    mock_usercode_success(&mock_server).await;
-
-    mock_poll_token_two_step(
-        &mock_server,
-        Arc::new(AtomicUsize::new(0)),
-        /*first_response_status*/ 404,
-    )
-    .await;
-
-    let jwt = make_jwt(json!({
-        "https://api.openai.com/auth": {
-            "chatgpt_account_id": WORKSPACE_ID_DISALLOWED,
-            "organization_id": WORKSPACE_ID_DISALLOWED
-        }
-    }));
-
-    mock_oauth_token_single(&mock_server, jwt).await;
-
-    let issuer = mock_server.uri();
-    let mut opts = server_opts(&codex_home, issuer, AuthCredentialsStoreMode::File);
+    let mut opts = server_opts(
+        &codex_home,
+        mock_server.uri(),
+        AuthCredentialsStoreMode::File,
+    );
     opts.forced_chatgpt_workspace_id = Some(vec![WORKSPACE_ID_ALLOWED.to_string()]);
 
     let err = run_device_code_login(opts)
@@ -193,8 +260,7 @@ async fn device_code_login_rejects_workspace_mismatch() -> anyhow::Result<()> {
         .expect_err("device code login should fail when workspace mismatches");
     assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
 
-    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
-        .context("auth.json should load after login fails")?;
+    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)?;
     assert!(
         auth.is_none(),
         "auth.json should not be created when workspace validation fails"
@@ -206,128 +272,113 @@ async fn device_code_login_rejects_workspace_mismatch() -> anyhow::Result<()> {
 async fn device_code_login_integration_handles_usercode_http_failure() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let codex_home = tempdir().unwrap();
+    let codex_home = tempdir()?;
     let mock_server = MockServer::start().await;
+    mock_discovery(&mock_server).await;
+    mock_device_code_failure(&mock_server, /*status*/ 503).await;
 
-    mock_usercode_failure(&mock_server, /*status*/ 503).await;
-
-    let issuer = mock_server.uri();
-
-    let opts = server_opts(&codex_home, issuer, AuthCredentialsStoreMode::File);
-
-    let err = run_device_code_login(opts)
-        .await
-        .expect_err("usercode HTTP failure should bubble up");
+    let err = run_device_code_login(server_opts(
+        &codex_home,
+        mock_server.uri(),
+        AuthCredentialsStoreMode::File,
+    ))
+    .await
+    .expect_err("usercode HTTP failure should bubble up");
     assert!(
         err.to_string()
             .contains("device code request failed with status"),
         "unexpected error: {err:?}"
     );
 
-    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
-        .context("auth.json should load after login fails")?;
-    assert!(
-        auth.is_none(),
-        "auth.json should not be created when login fails"
-    );
+    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)?;
+    assert!(auth.is_none(), "auth.json should not be created when login fails");
     Ok(())
 }
 
 #[tokio::test]
-async fn device_code_login_integration_persists_without_api_key_on_exchange_failure()
--> anyhow::Result<()> {
+async fn device_code_login_persists_without_api_key_or_workspace_claim() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let codex_home = tempdir().unwrap();
-
+    let codex_home = tempdir()?;
     let mock_server = MockServer::start().await;
+    mock_discovery(&mock_server).await;
+    mock_jwks(&mock_server).await;
+    mock_device_code_success(&mock_server).await;
+    let jwt = signed_id_token(&mock_server.uri(), None);
+    mock_token_success(&mock_server, jwt.clone()).await;
 
-    mock_usercode_success(&mock_server).await;
-
-    mock_poll_token_two_step(
-        &mock_server,
-        Arc::new(AtomicUsize::new(0)),
-        /*first_response_status*/ 404,
-    )
-    .await;
-
-    let jwt = make_jwt(json!({}));
-
-    mock_oauth_token_single(&mock_server, jwt.clone()).await;
-
-    let issuer = mock_server.uri();
-
-    let mut opts = ServerOptions::new(
-        codex_home.path().to_path_buf(),
-        "client-id".to_string(),
-        /*forced_chatgpt_workspace_id*/ None,
+    run_device_code_login(server_opts(
+        &codex_home,
+        mock_server.uri(),
         AuthCredentialsStoreMode::File,
-    );
-    opts.issuer = issuer;
-    opts.open_browser = false;
+    ))
+    .await
+    .expect("device login should succeed without API key exchange");
 
-    run_device_code_login(opts)
-        .await
-        .expect("device login should succeed without API key exchange");
-
-    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
-        .context("auth.json should load after login succeeds")?
+    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)?
         .context("auth.json written")?;
     assert!(auth.openai_api_key.is_none());
     let tokens = auth.tokens.expect("tokens persisted");
     assert_eq!(tokens.access_token, "access-token-123");
     assert_eq!(tokens.refresh_token, "refresh-token-123");
     assert_eq!(tokens.id_token.raw_jwt, jwt);
+    assert_eq!(tokens.account_id, None);
     Ok(())
 }
 
 #[tokio::test]
-async fn device_code_login_integration_handles_error_payload() -> anyhow::Result<()> {
+async fn device_code_login_continues_after_authorization_pending() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let codex_home = tempdir().unwrap();
-
-    // Start WireMock
+    let codex_home = tempdir()?;
     let mock_server = MockServer::start().await;
-
-    mock_usercode_success(&mock_server).await;
-
-    // // /deviceauth/token → returns error payload with status 401
-    mock_poll_token_single(
+    mock_discovery(&mock_server).await;
+    mock_jwks(&mock_server).await;
+    mock_device_code_success(&mock_server).await;
+    let jwt = signed_id_token(&mock_server.uri(), Some(WORKSPACE_ID_ALLOWED));
+    mock_token_sequence(
         &mock_server,
-        "/api/accounts/deviceauth/token",
-        ResponseTemplate::new(401).set_body_json(json!({
-            "error": "authorization_declined",
-            "error_description": "Denied"
+        Arc::new(AtomicUsize::new(0)),
+        ResponseTemplate::new(400).set_body_json(json!({
+            "error": "authorization_pending"
         })),
+        jwt,
     )
     .await;
 
-    // (WireMock will automatically 404 for other paths)
-
-    let issuer = mock_server.uri();
-
-    let mut opts = ServerOptions::new(
-        codex_home.path().to_path_buf(),
-        "client-id".to_string(),
-        /*forced_chatgpt_workspace_id*/ None,
+    run_device_code_login(server_opts(
+        &codex_home,
+        mock_server.uri(),
         AuthCredentialsStoreMode::File,
-    );
-    opts.issuer = issuer;
-    opts.open_browser = false;
+    ))
+    .await
+    .expect("device login should keep polling while authorization is pending");
+    Ok(())
+}
 
-    let err = run_device_code_login(opts)
-        .await
-        .expect_err("integration failure path should return error");
+#[tokio::test]
+async fn device_code_login_fails_on_terminal_oauth_error() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
 
-    // Accept either the specific error payload, a 400, or a 404 (since the client may return 404 if the flow is incomplete)
+    let codex_home = tempdir()?;
+    let mock_server = MockServer::start().await;
+    mock_discovery(&mock_server).await;
+    mock_device_code_success(&mock_server).await;
+    mock_token_error(&mock_server, 400, "access_denied", "Denied").await;
+
+    let err = run_device_code_login(server_opts(
+        &codex_home,
+        mock_server.uri(),
+        AuthCredentialsStoreMode::File,
+    ))
+    .await
+    .expect_err("terminal device auth errors should fail");
     assert!(
-        err.to_string().contains("authorization_declined") || err.to_string().contains("401"),
-        "Expected an authorization_declined / 400 / 404 error, got {err:?}"
+        err.to_string().contains("device auth failed: Denied"),
+        "unexpected error: {err:?}"
     );
 
-    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)
-        .context("auth.json should load after login fails")?;
+    let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)?;
     assert!(
         auth.is_none(),
         "auth.json should not be created when device auth fails"

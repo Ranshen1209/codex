@@ -19,7 +19,7 @@ For protocol details, use the canonical [RP integration guide](../../sub2api/sak
 - Responses API compatibility with Sakrylle API
 - Codex auth.json / app-server compatibility
 - Loopback login, Device Flow path compatibility, refresh and revoke behavior
-- id_token validation gaps: nonce, JWKS signature, issuer, audience, expiry
+- ~~id_token validation gaps: nonce, JWKS signature, issuer, audience, expiry~~ — **resolved** (see `oidc.rs`, 2026-06-06)
 
 ## Preserved historical notes
 

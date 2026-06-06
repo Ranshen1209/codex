@@ -29,6 +29,8 @@ use crate::auth::load_auth_dot_json;
 use crate::auth::revoke_auth_tokens;
 use crate::auth::save_auth;
 use crate::auth::should_revoke_auth_tokens;
+use crate::oidc::validate_discovery;
+use crate::oidc::verify_id_token;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use crate::token_data::TokenData;
@@ -77,34 +79,6 @@ pub struct OidcDiscovery {
     pub code_challenge_methods_supported: Option<Vec<String>>,
     #[serde(default)]
     pub id_token_signing_alg_values_supported: Option<Vec<String>>,
-}
-
-/// SAKRYLLE: OIDC login — JWKS key set for id_token verification.
-#[derive(Debug, Clone, Deserialize)]
-struct Jwks {
-    keys: Vec<Jwk>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct Jwk {
-    kid: String,
-    kty: String,
-    #[serde(default)]
-    alg: Option<String>,
-    #[serde(default)]
-    r#use: Option<String>,
-    // RSA
-    #[serde(default)]
-    n: Option<String>,
-    #[serde(default)]
-    e: Option<String>,
-    // EC
-    #[serde(default)]
-    crv: Option<String>,
-    #[serde(default)]
-    x: Option<String>,
-    #[serde(default)]
-    y: Option<String>,
 }
 
 /// SAKRYLLE: OIDC login — fetch the OpenID Connect discovery document.
@@ -233,10 +207,12 @@ pub async fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let issuer = &opts.issuer;
     // SAKRYLLE: OIDC login — fetch discovery document for endpoint URLs
     let discovery = fetch_discovery(issuer).await?;
+    validate_discovery(&discovery, issuer, /*require_device_endpoint*/ false)?;
     let auth_endpoint = &discovery.authorization_endpoint;
 
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
+    let nonce = generate_nonce();
 
     // SAKRYLLE: OIDC login — bind to 127.0.0.1:0 for a random free port
     let server = bind_server(0)?;
@@ -259,6 +235,8 @@ pub async fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         &redirect_uri,
         &pkce,
         &state,
+        &nonce,
+        opts.forced_chatgpt_workspace_id.as_deref(),
     );
 
     // SAKRYLLE: OIDC login — cross-platform browser open with URL fallback
@@ -292,7 +270,7 @@ pub async fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         let opts = opts.clone();
         let redirect_uri = redirect_uri.clone();
         let pkce = pkce.clone();
-        let state = state.clone();
+        let nonce = nonce.clone();
         tokio::spawn(async move {
             // SAKRYLLE: OIDC login — 300-second login timeout
             let timeout = tokio::time::sleep(Duration::from_secs(LOGIN_TIMEOUT_SECS));
@@ -316,7 +294,7 @@ pub async fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
 
                         let url_raw = req.url().to_string();
                         let response =
-                            process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state, &discovery).await;
+                            process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state, &nonce, &discovery).await;
 
                         let exit_result = match response {
                             HandledRequest::Response(response) => {
@@ -381,6 +359,7 @@ async fn process_request(
     pkce: &PkceCodes,
     actual_port: u16,
     state: &str,
+    nonce: &str,
     discovery: &OidcDiscovery,
 ) -> HandledRequest {
     let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
@@ -426,6 +405,11 @@ async fn process_request(
             if let Some(error_code) = params.get("error") {
                 let error_description = params.get("error_description").map(String::as_str);
                 let message = oauth_callback_error_message(error_code, error_description);
+                let safe_error_description = if is_missing_codex_entitlement_error(error_code, error_description) {
+                    None
+                } else {
+                    error_description
+                };
                 eprintln!("OAuth callback error: {message}");
                 warn!(
                     error_code,
@@ -436,7 +420,7 @@ async fn process_request(
                     &message,
                     io::ErrorKind::PermissionDenied,
                     Some(error_code),
-                    error_description,
+                    safe_error_description,
                 );
             }
             let code = match params.get("code") {
@@ -455,51 +439,69 @@ async fn process_request(
             match exchange_code_for_tokens(&discovery.token_endpoint, &opts.client_id, redirect_uri, pkce, &code)
                 .await
             {
-                Ok(tokens) => {
-                    if let Err(message) = ensure_workspace_allowed(
-                        opts.forced_chatgpt_workspace_id.as_deref(),
-                        &tokens.id_token,
-                    ) {
-                        eprintln!("Workspace restriction error: {message}");
-                        return login_error_response(
-                            &message,
-                            io::ErrorKind::PermissionDenied,
-                            Some("workspace_restriction"),
-                            /*error_description*/ None,
-                        );
-                    }
-                    // SAKRYLLE: OIDC login — persist tokens (no API key exchange needed)
-                    if let Err(err) = persist_tokens_async(
-                        &opts.codex_home,
-                        /*api_key*/ None,
-                        tokens.id_token.clone(),
-                        tokens.access_token.clone(),
-                        tokens.refresh_token.clone(),
-                        opts.cli_auth_credentials_store_mode,
-                    )
-                    .await
-                    {
-                        eprintln!("Persist error: {err}");
-                        return login_error_response(
-                            "Sign-in completed but credentials could not be saved locally.",
-                            io::ErrorKind::Other,
-                            Some("persist_failed"),
-                            Some(&err.to_string()),
-                        );
-                    }
+                Ok(tokens) => match verify_id_token(
+                    &tokens.id_token,
+                    discovery,
+                    &opts.client_id,
+                    Some(nonce),
+                )
+                .await
+                {
+                    Ok(verified_id_token) => {
+                        if let Err(message) = ensure_workspace_allowed(
+                            opts.forced_chatgpt_workspace_id.as_deref(),
+                            &verified_id_token.raw,
+                        ) {
+                            eprintln!("Workspace restriction error: {message}");
+                            return login_error_response(
+                                &message,
+                                io::ErrorKind::PermissionDenied,
+                                Some("workspace_restriction"),
+                                /*error_description*/ None,
+                            );
+                        }
+                        // SAKRYLLE: OIDC login — persist tokens only after strict ID token validation.
+                        if let Err(err) = persist_tokens_async(
+                            &opts.codex_home,
+                            /*api_key*/ None,
+                            verified_id_token.raw.clone(),
+                            tokens.access_token.clone(),
+                            tokens.refresh_token.clone(),
+                            opts.cli_auth_credentials_store_mode,
+                        )
+                        .await
+                        {
+                            eprintln!("Persist error: {err}");
+                            return login_error_response(
+                                "Sign-in completed but credentials could not be saved locally.",
+                                io::ErrorKind::Other,
+                                Some("persist_failed"),
+                                Some(&err.to_string()),
+                            );
+                        }
 
-                    // SAKRYLLE: OIDC login — redirect to local success page
-                    let success_url = format!("http://127.0.0.1:{actual_port}/success");
-                    match tiny_http::Header::from_bytes(&b"Location"[..], success_url.as_bytes()) {
-                        Ok(header) => HandledRequest::RedirectWithHeader(header),
-                        Err(_) => login_error_response(
-                            "Sign-in completed but redirecting back to the app failed.",
-                            io::ErrorKind::Other,
-                            Some("redirect_failed"),
-                            /*error_description*/ None,
-                        ),
+                        // SAKRYLLE: OIDC login — redirect to local success page
+                        let success_url = format!("http://127.0.0.1:{actual_port}/success");
+                        match tiny_http::Header::from_bytes(&b"Location"[..], success_url.as_bytes()) {
+                            Ok(header) => HandledRequest::RedirectWithHeader(header),
+                            Err(_) => login_error_response(
+                                "Sign-in completed but redirecting back to the app failed.",
+                                io::ErrorKind::Other,
+                                Some("redirect_failed"),
+                                /*error_description*/ None,
+                            ),
+                        }
                     }
-                }
+                    Err(err) => {
+                        eprintln!("ID token validation error: {err}");
+                        login_error_response(
+                            &format!("ID token validation failed: {err}"),
+                            io::ErrorKind::PermissionDenied,
+                            Some("id_token_validation_failed"),
+                            /*error_description*/ None,
+                        )
+                    }
+                },
                 Err(err) => {
                     eprintln!("Token exchange error: {err}");
                     error!("login callback token exchange failed");
@@ -590,10 +592,12 @@ fn build_authorize_url(
     redirect_uri: &str,
     pkce: &PkceCodes,
     state: &str,
+    nonce: &str,
+    forced_chatgpt_workspace_id: Option<&[String]>,
 ) -> String {
     // SAKRYLLE: OIDC login — aud as single-element array for sub2api
     let aud_json = serde_json::to_string(&[client_id]).unwrap_or_else(|_| format!("[\"{client_id}\"]"));
-    let query = vec![
+    let mut query = vec![
         ("response_type".to_string(), "code".to_string()),
         ("client_id".to_string(), client_id.to_string()),
         ("redirect_uri".to_string(), redirect_uri.to_string()),
@@ -604,8 +608,14 @@ fn build_authorize_url(
         ),
         ("code_challenge_method".to_string(), "S256".to_string()),
         ("state".to_string(), state.to_string()),
+        ("nonce".to_string(), nonce.to_string()),
         ("aud".to_string(), aud_json),
     ];
+    if let Some(workspace_ids) = forced_chatgpt_workspace_id
+        && !workspace_ids.is_empty()
+    {
+        query.push(("allowed_workspace_id".to_string(), workspace_ids.join(",")));
+    }
     let qs = query
         .into_iter()
         .map(|(k, v)| format!("{k}={}", urlencoding::encode(&v)))
@@ -650,6 +660,14 @@ fn open_browser_with_fallback(url: &str) {
 }
 
 fn generate_state() -> String {
+    random_urlsafe_token()
+}
+
+fn generate_nonce() -> String {
+    random_urlsafe_token()
+}
+
+fn random_urlsafe_token() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
@@ -1075,7 +1093,7 @@ fn login_error_response(
     }
 }
 
-/// Returns true when the OAuth callback represents a missing Codex entitlement.
+/// Returns true when the OAuth callback represents a missing Sakrylle entitlement.
 fn is_missing_codex_entitlement_error(error_code: &str, error_description: Option<&str>) -> bool {
     error_code == "access_denied"
         && error_description.is_some_and(|description| {
@@ -1088,7 +1106,7 @@ fn is_missing_codex_entitlement_error(error_code: &str, error_description: Optio
 /// Converts OAuth callback errors into a user-facing message.
 fn oauth_callback_error_message(error_code: &str, error_description: Option<&str>) -> String {
     if is_missing_codex_entitlement_error(error_code, error_description) {
-        return "Codex is not enabled for your workspace. Contact your workspace administrator to request access to Codex.".to_string();
+        return "Sakrylle is not enabled for your workspace. Contact your workspace administrator to request access to Sakrylle.".to_string();
     }
 
     if let Some(description) = error_description
@@ -1277,7 +1295,7 @@ mod tests {
     use super::TokenEndpointErrorDetail;
     use super::compose_success_url;
     use super::html_escape;
-    use super::is_missing_codex_entitlement_error;
+    use super::oauth_callback_error_message;
     use super::parse_token_endpoint_error;
     use super::persist_tokens_async;
     use super::redact_sensitive_query_value;
@@ -1603,22 +1621,14 @@ mod tests {
     }
 
     #[test]
-    fn render_login_error_page_uses_entitlement_copy() {
+    fn oauth_callback_error_message_uses_sakrylle_entitlement_copy() {
         let error_description = Some("missing_codex_entitlement");
-        assert!(is_missing_codex_entitlement_error(
-            "access_denied",
-            error_description
-        ));
 
-        let body = String::from_utf8(render_login_error_page(
-            "access denied",
-            Some("access_denied"),
-            error_description,
-        ))
-        .expect("login error page should be utf-8");
+        let message = oauth_callback_error_message("access_denied", error_description);
 
-        assert!(body.contains("You do not have access to Codex"));
-        assert!(body.contains("Contact your workspace administrator"));
-        assert!(!body.contains("missing_codex_entitlement"));
+        assert_eq!(
+            message,
+            "Sakrylle is not enabled for your workspace. Contact your workspace administrator to request access to Sakrylle."
+        );
     }
 }

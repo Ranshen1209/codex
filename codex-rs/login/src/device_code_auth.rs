@@ -5,7 +5,10 @@ use serde::de::{self};
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::oidc::validate_discovery;
+use crate::oidc::verify_id_token;
 use crate::server::ServerOptions;
+use crate::server::ensure_workspace_allowed;
 use crate::server::fetch_discovery;
 use codex_client::build_reqwest_client_with_custom_ca;
 use std::io;
@@ -31,8 +34,8 @@ struct UserCodeResp {
     verification_uri: String,
     #[serde(default, deserialize_with = "deserialize_interval")]
     interval: u64,
-    #[serde(default)]
-    expires_in: Option<u64>,
+    #[serde(default, rename = "expires_in")]
+    _expires_in: Option<u64>,
 }
 
 // SAKRYLLE: OIDC login — request structs removed; using form-encoded body directly per RFC 8628.
@@ -41,8 +44,17 @@ fn deserialize_interval<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let s = String::deserialize(deserializer)?;
-    s.trim().parse::<u64>().map_err(de::Error::custom)
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Interval {
+        String(String),
+        Number(u64),
+    }
+
+    match Interval::deserialize(deserializer)? {
+        Interval::String(value) => value.trim().parse::<u64>().map_err(de::Error::custom),
+        Interval::Number(value) => Ok(value),
+    }
 }
 
 /// SAKRYLLE: OIDC login — RFC 8628 token success response.
@@ -52,8 +64,10 @@ struct TokenSuccessResp {
     #[serde(default)]
     id_token: Option<String>,
     refresh_token: String,
-    token_type: Option<String>,
-    expires_in: Option<u64>,
+    #[serde(default, rename = "token_type")]
+    _token_type: Option<String>,
+    #[serde(default, rename = "expires_in")]
+    _expires_in: Option<u64>,
 }
 
 /// SAKRYLLE: OIDC login — request the device code via RFC 8628.
@@ -103,8 +117,16 @@ async fn poll_for_token(
     client_id: &str,
     interval: u64,
 ) -> std::io::Result<TokenSuccessResp> {
+    #[derive(Deserialize)]
+    struct TokenErrorResp {
+        error: String,
+        #[serde(default)]
+        error_description: Option<String>,
+    }
+
     let max_wait = Duration::from_secs(15 * 60);
     let start = Instant::now();
+    let mut interval = interval.max(1);
 
     loop {
         let body = format!(
@@ -127,8 +149,39 @@ async fn poll_for_token(
             return resp.json().await.map_err(std::io::Error::other);
         }
 
-        // RFC 8628: authorization_pending or slow_down
+        let body_text = resp.text().await.unwrap_or_default();
         if status == StatusCode::BAD_REQUEST || status == StatusCode::FORBIDDEN {
+            let token_error: TokenErrorResp = serde_json::from_str(&body_text).map_err(|err| {
+                std::io::Error::other(format!(
+                    "device auth failed with status {status}: failed to parse OAuth error response: {err}"
+                ))
+            })?;
+
+            match token_error.error.as_str() {
+                "authorization_pending" => {}
+                "slow_down" => {
+                    interval = interval.saturating_add(5);
+                }
+                "expired_token" | "access_denied" | "invalid_grant" => {
+                    let description = token_error
+                        .error_description
+                        .filter(|description| !description.trim().is_empty())
+                        .unwrap_or_else(|| token_error.error.clone());
+                    return Err(std::io::Error::other(format!(
+                        "device auth failed: {description}"
+                    )));
+                }
+                other => {
+                    let description = token_error
+                        .error_description
+                        .filter(|description| !description.trim().is_empty())
+                        .unwrap_or_else(|| other.to_string());
+                    return Err(std::io::Error::other(format!(
+                        "device auth failed: {description}"
+                    )));
+                }
+            }
+
             if start.elapsed() >= max_wait {
                 return Err(std::io::Error::other(
                     "device auth timed out after 15 minutes",
@@ -139,7 +192,6 @@ async fn poll_for_token(
             continue;
         }
 
-        let body_text = resp.text().await.unwrap_or_default();
         return Err(std::io::Error::other(format!(
             "device auth failed with status {status}: {body_text}"
         )));
@@ -161,6 +213,7 @@ fn print_device_code_prompt(verification_url: &str, code: &str) {
 pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<DeviceCode> {
     // SAKRYLLE: OIDC login — fetch discovery to get device_authorization_endpoint
     let discovery = fetch_discovery(&opts.issuer).await?;
+    validate_discovery(&discovery, &opts.issuer, /*require_device_endpoint*/ true)?;
     let device_auth_endpoint = discovery
         .device_authorization_endpoint
         .as_deref()
@@ -191,6 +244,7 @@ pub async fn complete_device_code_login(
 ) -> std::io::Result<()> {
     // SAKRYLLE: OIDC login — fetch discovery for token endpoint
     let discovery = fetch_discovery(&opts.issuer).await?;
+    validate_discovery(&discovery, &opts.issuer, /*require_device_endpoint*/ true)?;
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
 
     // SAKRYLLE: OIDC login — poll the token endpoint directly (RFC 8628)
@@ -203,11 +257,31 @@ pub async fn complete_device_code_login(
     )
     .await?;
 
-    // SAKRYLLE: OIDC login — persist tokens directly (no separate code exchange needed)
+    let id_token = token_resp.id_token.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "OIDC device token response did not include an id_token",
+        )
+    })?;
+    let verified_id_token = verify_id_token(
+        &id_token,
+        &discovery,
+        &opts.client_id,
+        /*expected_nonce*/ None,
+    )
+    .await?;
+    if let Err(message) = ensure_workspace_allowed(
+        opts.forced_chatgpt_workspace_id.as_deref(),
+        &verified_id_token.raw,
+    ) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
+    }
+
+    // SAKRYLLE: OIDC login — persist tokens directly after strict ID token validation.
     crate::server::persist_tokens_async(
         &opts.codex_home,
         /*api_key*/ None,
-        token_resp.id_token.unwrap_or_default(),
+        verified_id_token.raw,
         token_resp.access_token,
         token_resp.refresh_token,
         opts.cli_auth_credentials_store_mode,
