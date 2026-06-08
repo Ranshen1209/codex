@@ -1,0 +1,35 @@
+---
+description: OIDC documentation scope and update requirements
+globs: oidc-docs/**,codex-rs/login/**,codex-rs/config/**
+alwaysApply: false
+---
+
+# OIDC documentation governance
+
+`oidc-docs/` is **product-local** for Sakrylle CLI only.
+
+## Canonical platform docs
+
+`../../sub2api/sakrylle-docs/`:
+
+- `10-platform-identity/current-state.md`
+- `10-platform-identity/rp-integration-guide.md`
+- `10-platform-identity/commercial-boundaries.md`
+- `10-platform-identity/configuration-isolation.md`
+
+## Allowed local files
+
+- `oidc-docs/README.md`
+- `oidc-docs/local-integration.md`
+- `oidc-docs/implementation-status.md`
+- `oidc-docs/troubleshooting.md`
+- `oidc-docs/historical/` (preserved research/plans)
+
+Do **not** copy provider endpoints, claims policy, roadmap, risk register, or design system content here — link to center docs.
+
+## When to update
+
+Changing CLI auth, `SAKRYLLE_CLI_HOME`, provider defaults, OAuth/OIDC login, token storage, refresh/revoke/logout, or Responses API compatibility:
+
+1. Update local `oidc-docs/` notes
+2. Update `../../sub2api/sakrylle-docs/` when the platform contract changes

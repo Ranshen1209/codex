@@ -1,0 +1,55 @@
+---
+description: Common just/cargo commands for build, test, lint, and codegen
+alwaysApply: true
+---
+
+# Dev commands
+
+All run from `codex-rs/` unless noted.
+
+## Build and run
+
+```bash
+just codex -- "explain this codebase"   # cargo run --bin sakrylle
+just exec "do something"                 # non-interactive mode
+cargo build
+```
+
+## Format and lint
+
+```bash
+just fmt
+just fmt-check
+just fix -p <crate>
+just clippy -p <crate>
+just argument-comment-lint
+```
+
+## Tests
+
+```bash
+just test -p <crate>                     # prefer scoped tests
+just test                                # full suite — ask before running
+just bench-smoke
+cargo insta pending-snapshots -p codex-tui
+cargo insta accept -p codex-tui
+```
+
+## Schema and codegen
+
+```bash
+just write-config-schema
+just write-app-server-schema
+just write-app-server-schema --experimental
+just write-hooks-schema
+```
+
+## Dependencies and other
+
+```bash
+just bazel-lock-update                   # after Cargo.toml/Cargo.lock changes
+just bazel-lock-check
+just install
+just mcp-server-run
+just log
+```

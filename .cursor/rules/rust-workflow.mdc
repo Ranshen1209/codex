@@ -1,0 +1,28 @@
+---
+description: Rust coding workflow and key conventions (see AGENTS.md for full detail)
+globs: codex-rs/**/*.rs
+alwaysApply: false
+---
+
+# Rust workflow
+
+Full conventions: root `AGENTS.md`.
+
+## After changes
+
+- Run `just fmt` without asking.
+- Run `just fix -p <crate>` (scoped unless touching shared crates).
+- Prefer `just test -p <crate>`; ask before `just test` (full suite).
+
+## Design
+
+- **Avoid adding code to `codex-core`.** Use specialized crates instead.
+- Modules < 500 LoC (excl. tests); files ~800 LoC max.
+- New test modules: `#[path = "..._tests.rs"]`, not inline `mod tests`.
+- Integration tests (`core/suite`) preferred for agent logic changes.
+- `just write-config-schema` after config type changes.
+- `just bazel-lock-update` + commit lockfile after dependency changes.
+
+## Bazel
+
+Add `compile_data` / `build_script_data` in `BUILD.bazel` for `include_str!`, `include_bytes!`, `sqlx::migrate!`.

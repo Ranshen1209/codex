@@ -1,0 +1,24 @@
+---
+description: TUI module layout and styling conventions
+globs: codex-rs/tui/**/*
+alwaysApply: false
+---
+
+# TUI (`codex-rs/tui/src/`)
+
+ratatui-based terminal UI. Key modules:
+
+- `app.rs` — central orchestration (keep under 800 LoC; prefer new modules)
+- `chatwidget.rs` — chat rendering (avoid standalone methods here)
+- `bottom_pane/` — composer, footer, input (see nested `AGENTS.md`)
+- `diff_render.rs` — git diff display
+- `app_server_session.rs` — remote app-server sessions
+- `wrapping.rs` — text wrapping helpers
+- `styles.md` — colors: cyan=user tips, green=success, red=error, magenta=agent; avoid custom colors
+
+## Conventions
+
+- Use Stylize helpers (`"text".dim()`, `.red()`, `.cyan()`) not manual `Style`.
+- Snapshot tests (`insta`) required for user-visible UI changes.
+- Use `textwrap::wrap` and helpers in `wrapping.rs` for text wrapping.
+- See root `AGENTS.md` for detailed TUI style and module-size rules.

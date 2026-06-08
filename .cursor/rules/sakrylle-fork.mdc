@@ -1,0 +1,24 @@
+---
+description: Sakrylle fork branding, OIDC, config isolation, and provider features
+alwaysApply: true
+---
+
+# Sakrylle fork specifics
+
+## Brand
+
+Replace user-facing "Codex"/"codex"/"OpenAI Codex" with "Sakrylle"/"sakrylle" in CLI help, errors, update prompts, and `bin_name`.
+
+## OIDC
+
+RP integration in `codex-rs/login/src/oidc.rs`: JWKS verification, issuer/audience/nonce/exp validation, discovery doc validation. Local notes in `oidc-docs/`; canonical platform docs at `../../sub2api/sakrylle-docs/`.
+
+## Config isolation
+
+`codex-rs/config/` — profile-based isolation (`CODEX_HOME/<name>.config.toml`).
+
+## Provider features
+
+- `Sakrylle` provider enabled
+- `codex_apps` MCP client disabled
+- `image_generation` tools disabled for Sakrylle provider

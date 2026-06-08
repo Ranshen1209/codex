@@ -1,0 +1,20 @@
+---
+description: App-server v2 JSON-RPC protocol conventions
+globs: codex-rs/app-server*/**/*
+alwaysApply: false
+---
+
+# App-server protocol (v2)
+
+JSON-RPC over WebSocket/stdio/Unix socket.
+
+- Methods: `<resource>/<method>` with singular resource names
+- Payloads: `*Params`, `*Response`, `*Notification`
+- Wire fields: camelCase (`#[serde(rename_all = "camelCase")]`), except config RPCs (snake_case)
+- TypeScript: `#[ts(export_to = "v2/")]` on all RPC types
+- **New API surface goes in v2 only, never v1**
+- Never use `#[serde(skip_serializing_if = "Option::is_none")]` on v2 API types
+
+After protocol changes: `just write-app-server-schema` (add `--experimental` if needed).
+
+See root `AGENTS.md` for full v2 development best practices.

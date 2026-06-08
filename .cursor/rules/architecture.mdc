@@ -1,0 +1,39 @@
+---
+description: Crate graph, entry point, and auth flow
+globs: codex-rs/**/*
+alwaysApply: false
+---
+
+# Architecture
+
+## Crate naming
+
+Rust crates in `codex-rs/` are prefixed `codex-`. Directory `foo` → crate `codex-foo`. Utils: `codex-rs/utils/<name>` → `codex-utils-<name>`.
+
+## Key crates
+
+- `cli` — entry point, CLAP, subcommand dispatch
+- `tui` — ratatui interactive UI
+- `exec` — non-interactive execution
+- `app-server` (+ protocol, client, daemon) — JSON-RPC for IDE integrations
+- `exec-server` — WebSocket exec server
+- `mcp-server` — MCP stdio server
+- `core` — config, agent loop, context, tool routing (**avoid adding code here**)
+- `config`, `protocol`, `login`, `backend-client`, `codex-mcp`
+- `model-provider`, `models-manager`, `execpolicy`
+- `sandboxing`, `connectors`, `file-search`, `hooks`, `plugin`, `state`
+- `ext/` — image-generation, web-search, memories, goal, guardian
+
+## Entry point
+
+`codex-rs/cli/src/main.rs` — `MultitoolCli`, ~25 subcommands, `bin_name = "sakrylle"`. No subcommand → interactive TUI.
+
+## Auth (`codex-rs/login/`)
+
+- ChatGPT OAuth (default interactive)
+- API key (`--with-api-key`, stdin)
+- Access token (`--with-access-token`, stdin)
+- Device code OIDC (`--device-auth`)
+- Agent JWT (`CODEX_ACCESS_TOKEN`)
+
+Sakrylle fork: OIDC auto-login and arrow-key login prompts on first run.

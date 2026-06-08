@@ -1,0 +1,27 @@
+---
+description: Sakrylle CLI project identity, layout, and build systems
+alwaysApply: true
+---
+
+# Sakrylle CLI
+
+Fork of [OpenAI Codex CLI](https://github.com/openai/codex) rebranded as **Sakrylle CLI** (binary: `sakrylle`, alias: `skl`). Remote: `Ranshen1209/sakrylle-cli`, branch: `sakrylle/main`. Adds OIDC auth, config isolation, and brand replacement.
+
+## Layout
+
+| Directory | Purpose |
+|---|---|
+| `codex-rs/` | Rust workspace (~100 crates) |
+| `codex-cli/` | TypeScript CLI wrapper |
+| `sdk/` | Python, Python-runtime, TypeScript SDKs |
+| `docs/` | Contributing, install, open-source docs |
+| `oidc-docs/` | Sakrylle OIDC notes (canonical docs elsewhere) |
+| `scripts/` | Build/CI helpers |
+| `patches/` | Vendored dependency patches |
+
+## Build systems
+
+- **Local dev:** Cargo workspace at `codex-rs/Cargo.toml`; run Rust commands from `codex-rs/`.
+- **CI/release:** Bazel (`MODULE.bazel`). Add `compile_data` / `build_script_data` for `include_str!`, `include_bytes!`, `sqlx::migrate!`.
+- **JS:** pnpm >= 10.33.0, prettier for formatting.
+- **Tasks:** `just` task runner (`justfile` at repo root).
