@@ -103,7 +103,9 @@ pub(crate) fn validate_discovery(
     }
 
     if let Some(algs) = discovery.id_token_signing_alg_values_supported.as_ref()
-        && !algs.iter().any(|alg| parse_allowed_algorithm(alg).is_some())
+        && !algs
+            .iter()
+            .any(|alg| parse_allowed_algorithm(alg).is_some())
     {
         return Err(io::Error::other(
             "OIDC discovery does not advertise a supported ID token signing algorithm",
@@ -181,12 +183,13 @@ pub(crate) async fn verify_id_token(
     validation.required_spec_claims.insert("exp".to_string());
     validation.required_spec_claims.insert("sub".to_string());
 
-    let token = decode::<OidcIdTokenClaims>(raw_id_token, &decoding_key, &validation).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("failed to verify ID token: {err}"),
-        )
-    })?;
+    let token =
+        decode::<OidcIdTokenClaims>(raw_id_token, &decoding_key, &validation).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("failed to verify ID token: {err}"),
+            )
+        })?;
     let claims = token.claims;
     validate_claims(&claims, client_id, expected_nonce)?;
 
@@ -307,6 +310,68 @@ mod tests {
     const CLIENT_ID: &str = "sakrylle-cli";
     const NONCE: &str = "nonce-123";
 
+    const ES256_KID: &str = "es256-test-key";
+
+    // Real P-256 private key (PKCS#8), test-only.
+    const TEST_EC_PRIVATE_KEY_PEM: &[u8] = br#"-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgSDKKdXs1zAc8PT1U
+J9F2jGuJosAvKOsfvG/RD7EHYwihRANCAASAtsayQTFIuklZWia6MtUuHIFhvPVK
+fU5UloEKyhNtleNJcA/rW8ZLVY334pB0n8lHwMCuhojRPbeEff5UclTu
+-----END PRIVATE KEY-----"#;
+
+    fn es256_jwks_body() -> serde_json::Value {
+        json!({
+            "keys": [{
+                "kty": "EC",
+                "crv": "P-256",
+                "alg": "ES256",
+                "use": "sig",
+                "kid": ES256_KID,
+                "x": "gLbGskExSLpJWVomujLVLhyBYbz1Sn1OVJaBCsoTbZU",
+                "y": "40lwD-tbxktVjffikHSfyUfAwK6GiNE9t4R9_lRyVO4"
+            }]
+        })
+    }
+
+    fn es256_discovery(server: &MockServer) -> OidcDiscovery {
+        let mut d = discovery(server);
+        d.id_token_signing_alg_values_supported = Some(vec!["ES256".to_string()]);
+        d
+    }
+
+    async fn mount_es256_jwks(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/oauth/jwks"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(es256_jwks_body()))
+            .mount(server)
+            .await;
+    }
+
+    fn signed_es256_id_token(
+        issuer: &str,
+        audience: serde_json::Value,
+        nonce: Option<&str>,
+    ) -> jsonwebtoken::errors::Result<String> {
+        let mut header = Header::new(Algorithm::ES256);
+        header.kid = Some(ES256_KID.to_string());
+        let now = Utc::now().timestamp() as usize;
+        let mut claims = json!({
+            "iss": issuer,
+            "sub": "user-123",
+            "aud": audience,
+            "iat": now,
+            "exp": now + 3600,
+        });
+        if let Some(nonce) = nonce {
+            claims["nonce"] = json!(nonce);
+        }
+        jsonwebtoken::encode(
+            &header,
+            &claims,
+            &EncodingKey::from_ec_pem(TEST_EC_PRIVATE_KEY_PEM)?,
+        )
+    }
+
     fn discovery(server: &MockServer) -> OidcDiscovery {
         OidcDiscovery {
             issuer: server.uri(),
@@ -374,7 +439,12 @@ mod tests {
         assert_eq!(verified.claims.iss, discovery.issuer);
         assert!(verified.claims.exp > 0);
         assert!(verified.claims.nbf.is_none());
-        assert!(verified.claims.extra.contains_key("https://api.openai.com/auth"));
+        assert!(
+            verified
+                .claims
+                .extra
+                .contains_key("https://api.openai.com/auth")
+        );
     }
 
     #[tokio::test]
@@ -408,7 +478,8 @@ mod tests {
         let server = MockServer::start().await;
         mount_jwks(&server).await;
         let discovery = discovery(&server);
-        let token = signed_id_token(&discovery.issuer, json!(CLIENT_ID), None).expect("signed token");
+        let token =
+            signed_id_token(&discovery.issuer, json!(CLIENT_ID), None).expect("signed token");
 
         verify_id_token(&token, &discovery, CLIENT_ID, Some(NONCE))
             .await
@@ -474,4 +545,62 @@ J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
 5da0D4h2rYOXnbYIg0BVu4spQbaM6ewsp66b8+MzLOBvj8SzWdt1Oyw0q/MRyQAR
 8U4M2TSWCKUY/A6sT4W8+mT9
 -----END PRIVATE KEY-----"#;
+
+    #[tokio::test]
+    async fn verifies_valid_es256_id_token() {
+        let server = MockServer::start().await;
+        mount_es256_jwks(&server).await;
+        let discovery = es256_discovery(&server);
+        let token = signed_es256_id_token(&discovery.issuer, json!(CLIENT_ID), Some(NONCE))
+            .expect("signed es256 token");
+
+        let verified = verify_id_token(&token, &discovery, CLIENT_ID, Some(NONCE))
+            .await
+            .expect("valid ES256 token should verify");
+
+        assert_eq!(verified.claims.sub, "user-123");
+        assert_eq!(verified.claims.iss, discovery.issuer);
+    }
+
+    #[tokio::test]
+    async fn rejects_hs256_id_token() {
+        let server = MockServer::start().await;
+        mount_jwks(&server).await;
+        let discovery = discovery(&server);
+
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some("test-key".to_string());
+        let now = Utc::now().timestamp() as usize;
+        let claims = json!({
+            "iss": discovery.issuer,
+            "sub": "user-123",
+            "aud": CLIENT_ID,
+            "iat": now,
+            "exp": now + 3600,
+            "nonce": NONCE,
+        });
+        let token = jsonwebtoken::encode(
+            &header,
+            &claims,
+            &EncodingKey::from_secret(b"shared-secret"),
+        )
+        .expect("signed hs256 token");
+
+        verify_id_token(&token, &discovery, CLIENT_ID, Some(NONCE))
+            .await
+            .expect_err("HS256 is not an allowed id_token algorithm");
+    }
+
+    #[tokio::test]
+    async fn rejects_nonce_mismatch() {
+        let server = MockServer::start().await;
+        mount_jwks(&server).await;
+        let discovery = discovery(&server);
+        let token = signed_id_token(&discovery.issuer, json!(CLIENT_ID), Some("other-nonce"))
+            .expect("signed token");
+
+        verify_id_token(&token, &discovery, CLIENT_ID, Some(NONCE))
+            .await
+            .expect_err("mismatched nonce should fail");
+    }
 }
