@@ -560,12 +560,12 @@ J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
 
         assert_eq!(verified.claims.sub, "user-123");
         assert_eq!(verified.claims.iss, discovery.issuer);
+        assert_eq!(verified.raw, token);
     }
 
     #[tokio::test]
     async fn rejects_hs256_id_token() {
         let server = MockServer::start().await;
-        mount_jwks(&server).await;
         let discovery = discovery(&server);
 
         let mut header = Header::new(Algorithm::HS256);
@@ -586,9 +586,14 @@ J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
         )
         .expect("signed hs256 token");
 
-        verify_id_token(&token, &discovery, CLIENT_ID, Some(NONCE))
+        let err = verify_id_token(&token, &discovery, CLIENT_ID, Some(NONCE))
             .await
             .expect_err("HS256 is not an allowed id_token algorithm");
+        assert!(
+            err.to_string()
+                .contains("unsupported ID token signing algorithm"),
+            "HS256 should be rejected by the algorithm allowlist, got: {err}"
+        );
     }
 
     #[tokio::test]
