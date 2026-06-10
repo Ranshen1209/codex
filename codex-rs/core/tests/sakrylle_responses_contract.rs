@@ -1,5 +1,6 @@
-//! SAKRYLLE: /v1/responses 契约测试 —— 断言 CLI 出站请求命中 Responses 端点、
-//! 携带 Bearer 凭据、请求体符合 Responses wire API 形态。
+//! SAKRYLLE: contract test for the /v1/responses endpoint — asserts the CLI's
+//! outbound request hits the Responses endpoint, carries a Bearer credential, and
+//! has a Responses-wire-API-shaped body.
 
 use core_test_support::responses;
 use core_test_support::test_codex::test_codex;
@@ -21,7 +22,7 @@ fn sakrylle_responses_request_hits_endpoint_with_bearer_and_input() {
         .stack_size(TEST_STACK_SIZE_BYTES)
         .spawn(|| {
             tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
+                .worker_threads(1)
                 .thread_stack_size(TEST_STACK_SIZE_BYTES)
                 .enable_all()
                 .build()
@@ -45,7 +46,7 @@ async fn run_test() {
     let test = test_codex().build(&server).await.expect("build test codex");
     test.submit_turn("hello").await.expect("submit turn");
 
-    // 命中 /v1/responses（被该 mount 捕获即证明路径正确）+ 携带 Bearer 凭据。
+    // Hitting the responses mock proves the path is correct; also require a Bearer credential.
     let request = recorder.single_request();
     let auth = request
         .header("authorization")
@@ -55,10 +56,9 @@ async fn run_test() {
         "Authorization must be a Bearer token, got: {auth}"
     );
 
-    // Responses wire API 形态：请求体含 `input` 数组。
-    let body = request.body_json();
+    // Responses wire API shape: the request body carries an `input` array.
     assert!(
-        body.get("input").is_some(),
-        "responses request body must include `input`, got: {body}"
+        !request.input().is_empty(),
+        "responses request body must include a non-empty `input` array"
     );
 }
