@@ -8,7 +8,6 @@ use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
-use crate::app_event::FeedbackCategory;
 use crate::app_event::HistoryLookupResponse;
 use crate::app_event::PermissionProfileSelection;
 use crate::app_event::RateLimitRefreshOrigin;
@@ -22,7 +21,6 @@ use crate::app_server_session::TurnPermissionsOverride;
 use crate::app_server_session::app_server_rate_limit_snapshots;
 use crate::bottom_pane::AppLinkViewParams;
 use crate::bottom_pane::ApprovalRequest;
-use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -41,8 +39,6 @@ use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
-#[cfg(not(debug_assertions))]
-use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::hooks_rpc::HookTrustUpdate;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::RuntimeKeymap;
@@ -77,7 +73,6 @@ use crate::token_usage::TokenUsage;
 use crate::transcript_reflow::TranscriptReflowState;
 use crate::tui;
 use crate::tui::TuiEvent;
-use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use crate::workspace_command::AppServerWorkspaceCommandRunner;
 use crate::workspace_command::WorkspaceCommandRunner;
@@ -93,8 +88,6 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
-use codex_app_server_protocol::FeedbackUploadParams;
-use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::HooksListEntry;
 use codex_app_server_protocol::ListMcpServerStatusParams;
@@ -383,7 +376,6 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub thread_id: Option<ThreadId>,
     pub thread_name: Option<String>,
-    pub update_action: Option<UpdateAction>,
     pub exit_reason: ExitReason,
 }
 
@@ -393,7 +385,6 @@ impl AppExitInfo {
             token_usage: TokenUsage::default(),
             thread_id: None,
             thread_name: None,
-            update_action: None,
             exit_reason: ExitReason::Fatal(message.into()),
         }
     }
@@ -520,12 +511,14 @@ pub(crate) struct App {
     /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
     /// transcript cells.
     pub(crate) backtrack_render_pending: bool,
+    /// Holds the process-wide `CodexFeedback` sink that backs the tracing
+    /// logger/metadata layers installed in `lib.rs`. It is threaded through and
+    /// owned here for lifetime purposes; the in-app `/feedback` UI was removed,
+    /// so the field is no longer read directly.
+    #[allow(dead_code)]
     pub(crate) feedback: codex_feedback::CodexFeedback,
-    feedback_audience: FeedbackAudience,
     environment_manager: Arc<EnvironmentManager>,
     app_server_target: AppServerTarget,
-    /// Set when the user confirms an update; propagated on exit.
-    pub(crate) pending_update_action: Option<UpdateAction>,
 
     /// Tracks the thread we intentionally shut down while exiting the app.
     ///
@@ -693,7 +686,6 @@ impl App {
             enhanced_keys_supported: self.enhanced_keys_supported,
             has_chatgpt_account: self.chat_widget.has_chatgpt_account(),
             model_catalog: self.model_catalog.clone(),
-            feedback: self.feedback.clone(),
             is_first_run: false,
             status_account_display: self.chat_widget.status_account_display().cloned(),
             runtime_model_provider_base_url: self
@@ -769,7 +761,6 @@ impl App {
                     token_usage: TokenUsage::default(),
                     thread_id: None,
                     thread_name: None,
-                    update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 });
             }
@@ -805,7 +796,6 @@ impl App {
             model = updated_model;
         }
         let model_catalog = Arc::new(ModelCatalog::new(available_models.clone()));
-        let feedback_audience = bootstrap.feedback_audience;
         let auth_mode = bootstrap.auth_mode;
         let has_chatgpt_account = bootstrap.has_chatgpt_account;
         let requires_openai_auth = bootstrap.requires_openai_auth;
@@ -877,7 +867,6 @@ impl App {
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     model_catalog: model_catalog.clone(),
-                    feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
                     runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
@@ -912,7 +901,6 @@ impl App {
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     model_catalog: model_catalog.clone(),
-                    feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
                     runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
@@ -950,7 +938,6 @@ impl App {
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     model_catalog: model_catalog.clone(),
-                    feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
                     runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
@@ -982,8 +969,6 @@ Fix the config and retry.\n\
 See the Codex keymap documentation for supported actions and examples."
             )
         })?;
-        #[cfg(not(debug_assertions))]
-        let upgrade_version = crate::updates::get_upgrade_version(&config);
 
         let mut app = Self {
             model_catalog,
@@ -1013,10 +998,8 @@ See the Codex keymap documentation for supported actions and examples."
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
-            feedback_audience,
             environment_manager,
             app_server_target,
-            pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
@@ -1103,25 +1086,7 @@ See the Codex keymap documentation for supported actions and examples."
         let mut listen_for_app_server_events = true;
         let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
 
-        #[cfg(not(debug_assertions))]
-        let pre_loop_exit_reason = if let Some(latest_version) = upgrade_version {
-            let control = Box::pin(app.handle_event(
-                tui,
-                &mut app_server,
-                AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
-                    latest_version,
-                    crate::update_action::get_update_action(),
-                ))),
-            ))
-            .await?;
-            match control {
-                AppRunControl::Continue => None,
-                AppRunControl::Exit(exit_reason) => Some(exit_reason),
-            }
-        } else {
-            None
-        };
-        #[cfg(debug_assertions)]
+        // SAKRYLLE: in-app update-available notice removed.
         let pre_loop_exit_reason: Option<ExitReason> = None;
 
         let exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
@@ -1218,7 +1183,6 @@ See the Codex keymap documentation for supported actions and examples."
             token_usage: app.token_usage(),
             thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
             thread_name: resumable_thread.and_then(|thread| thread.thread_name),
-            update_action: app.pending_update_action,
             exit_reason,
         })
     }

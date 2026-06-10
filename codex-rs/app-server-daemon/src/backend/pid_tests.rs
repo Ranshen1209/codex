@@ -4,7 +4,6 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 use super::PidBackend;
-use super::PidCommandKind;
 use super::PidFileState;
 use super::PidLogTail;
 use super::PidRecord;
@@ -142,21 +141,6 @@ async fn stale_record_cleanup_preserves_replacement_record() {
             .await
             .expect("cleanup"),
         PidFileState::Running(replacement)
-    );
-}
-
-#[test]
-fn update_loop_uses_hidden_app_server_subcommand() {
-    let backend = PidBackend {
-        codex_bin: "codex".into(),
-        pid_file: "updater.pid".into(),
-        lock_file: "updater.pid.lock".into(),
-        command_kind: PidCommandKind::UpdateLoop,
-    };
-
-    assert_eq!(
-        backend.command_args(),
-        vec!["app-server", "daemon", "pid-update-loop"]
     );
 }
 

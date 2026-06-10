@@ -73,7 +73,6 @@ mod runtime;
 mod system;
 mod thread_inventory;
 mod title;
-mod updates;
 
 use background::background_server_check;
 use git::git_check;
@@ -87,7 +86,6 @@ use runtime::search_check;
 use system::system_check;
 use thread_inventory::thread_inventory_check;
 use title::terminal_title_check;
-use updates::updates_check;
 
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
@@ -355,7 +353,6 @@ async fn build_report(
             let (
                 config_check,
                 auth_check,
-                updates_check,
                 network_check,
                 websocket_check,
                 mcp_check,
@@ -370,7 +367,6 @@ async fn build_report(
             ) = tokio::join!(
                 async { run_sync_check("config", progress.clone(), || config_check(config)) },
                 async { run_sync_check("auth", progress.clone(), || auth_check(config)) },
-                async { run_sync_check("updates", progress.clone(), || updates_check(config)) },
                 async { run_sync_check("network", progress.clone(), network_check) },
                 run_async_check(
                     "websocket",
@@ -414,7 +410,6 @@ async fn build_report(
             checks.extend([
                 config_check,
                 auth_check,
-                updates_check,
                 network_check,
                 websocket_check,
                 mcp_check,

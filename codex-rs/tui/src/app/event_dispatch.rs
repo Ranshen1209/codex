@@ -313,14 +313,10 @@ impl App {
                     .add_info_message("Starting Sakrylle login...".to_string(), None);
 
                 // Find the sakrylle binary path
-                let exe = std::env::current_exe()
-                    .unwrap_or_else(|_| "sakrylle".into());
+                let exe = std::env::current_exe().unwrap_or_else(|_| "sakrylle".into());
 
                 // Run login synchronously (blocking)
-                match std::process::Command::new(&exe)
-                    .arg("login")
-                    .status()
-                {
+                match std::process::Command::new(&exe).arg("login").status() {
                     Ok(status) if status.success() => {
                         self.chat_widget.add_info_message(
                             "Login successful! Please restart Sakrylle CLI to use the new credentials."
@@ -329,14 +325,12 @@ impl App {
                         );
                     }
                     Ok(status) => {
-                        self.chat_widget.add_error_message(
-                            format!("Login failed with status: {status}")
-                        );
+                        self.chat_widget
+                            .add_error_message(format!("Login failed with status: {status}"));
                     }
                     Err(e) => {
-                        self.chat_widget.add_error_message(
-                            format!("Failed to start login: {e}")
-                        );
+                        self.chat_widget
+                            .add_error_message(format!("Failed to start login: {e}"));
                     }
                 }
             }
@@ -843,32 +837,6 @@ impl App {
                     extra_count,
                     failed_scan,
                 );
-            }
-            AppEvent::OpenFeedbackNote {
-                category,
-                include_logs,
-            } => {
-                self.chat_widget.open_feedback_note(category, include_logs);
-            }
-            AppEvent::OpenFeedbackConsent { category } => {
-                self.chat_widget.open_feedback_consent(category);
-            }
-            AppEvent::SubmitFeedback {
-                category,
-                reason,
-                turn_id,
-                include_logs,
-            } => {
-                self.submit_feedback(app_server, category, reason, turn_id, include_logs);
-            }
-            AppEvent::FeedbackSubmitted {
-                origin_thread_id,
-                category,
-                include_logs,
-                result,
-            } => {
-                self.handle_feedback_submitted(origin_thread_id, category, include_logs, result)
-                    .await;
             }
             AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {

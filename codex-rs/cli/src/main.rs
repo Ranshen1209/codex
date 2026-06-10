@@ -31,7 +31,6 @@ use codex_state::memories_db_path;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
-use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::ProfileV2Name;
@@ -54,8 +53,6 @@ mod remote_control_cmd;
 #[cfg(target_os = "windows")]
 mod sandbox_setup;
 mod state_db_recovery;
-#[cfg(not(windows))]
-mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
 use crate::plugin_cmd::PluginCli;
@@ -154,9 +151,6 @@ enum Subcommand {
 
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
-
-    /// Update Sakrylle to the latest version.
-    Update,
 
     /// Diagnose local Sakrylle installation, config, auth, and runtime health.
     Doctor(DoctorCommand),
@@ -595,10 +589,6 @@ enum AppServerDaemonSubcommand {
 
     /// Print local CLI and running app-server versions as JSON.
     Version,
-
-    /// [internal] Run the detached pid-backed standalone updater loop.
-    #[clap(hide = true)]
-    PidUpdateLoop,
 }
 
 #[derive(Debug, Args)]
@@ -685,7 +675,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     lines
 }
 
-/// Handle the app exit and print the results. Optionally run the update action.
+/// Handle the app exit and print the results.
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     match exit_info.exit_reason {
         ExitReason::Fatal(message) => {
@@ -695,69 +685,11 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
         ExitReason::UserRequested => { /* normal exit */ }
     }
 
-    let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
     for line in format_exit_messages(exit_info, color_enabled) {
         println!("{line}");
     }
-    if let Some(action) = update_action {
-        run_update_action(action)?;
-    }
     Ok(())
-}
-
-/// Run the update action and print the result.
-fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
-    println!();
-    let cmd_str = action.command_str();
-    // SAKRYLLE: brand replacement
-    println!("Updating Sakrylle via `{cmd_str}`...");
-
-    let status = {
-        #[cfg(windows)]
-        {
-            // On Windows, run via cmd.exe so .CMD/.BAT are correctly resolved (PATHEXT semantics).
-            std::process::Command::new("cmd")
-                .args(["/C", &cmd_str])
-                .status()?
-        }
-        #[cfg(not(windows))]
-        {
-            let (cmd, args) = action.command_args();
-            let command_path = crate::wsl_paths::normalize_for_wsl(cmd);
-            let normalized_args: Vec<String> = args
-                .iter()
-                .map(crate::wsl_paths::normalize_for_wsl)
-                .collect();
-            std::process::Command::new(&command_path)
-                .args(&normalized_args)
-                .status()?
-        }
-    };
-    if !status.success() {
-        anyhow::bail!("`{cmd_str}` failed with status {status}");
-    }
-    println!("\n🎉 Update ran successfully! Please restart Sakrylle.");
-    Ok(())
-}
-
-fn run_update_command() -> anyhow::Result<()> {
-    #[cfg(debug_assertions)]
-    {
-        anyhow::bail!(
-            "`sakrylle update` is not available in debug builds. Install a release build of Sakrylle to use this command."
-        );
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
-        let Some(action) = codex_tui::get_update_action() else {
-            anyhow::bail!(
-                "Could not detect the Sakrylle installation method. Please update manually: https://doc.sakrylle.com/developers/cli/"
-            );
-        };
-        run_update_action(action)
-    }
 }
 
 fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
@@ -1100,9 +1032,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     AppServerDaemonSubcommand::Version => {
                         print_app_server_daemon_output(AppServerLifecycleCommand::Version).await?;
                     }
-                    AppServerDaemonSubcommand::PidUpdateLoop => {
-                        codex_app_server_daemon::run_pid_update_loop().await?;
-                    }
                 },
                 Some(AppServerSubcommand::Proxy(proxy_cli)) => {
                     let socket_path = match proxy_cli.socket_path {
@@ -1302,14 +1231,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 "completion",
             )?;
             print_completion(completion_cli);
-        }
-        Some(Subcommand::Update) => {
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                "update",
-            )?;
-            run_update_command()?;
         }
         Some(Subcommand::Doctor(doctor_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -2008,7 +1929,6 @@ fn unsupported_subcommand_name_for_strict_config(
         Some(Subcommand::Login(_)) => Some("login"),
         Some(Subcommand::Logout(_)) => Some("logout"),
         Some(Subcommand::Completion(_)) => Some("completion"),
-        Some(Subcommand::Update) => Some("update"),
         Some(Subcommand::Cloud(_)) => Some("cloud"),
         Some(Subcommand::Sandbox(_)) => Some("sandbox"),
         Some(Subcommand::Debug(_)) => Some("debug"),
@@ -2067,7 +1987,6 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
             }
             AppServerDaemonSubcommand::Stop => "app-server daemon stop",
             AppServerDaemonSubcommand::Version => "app-server daemon version",
-            AppServerDaemonSubcommand::PidUpdateLoop => "app-server daemon pid-update-loop",
         },
         Some(AppServerSubcommand::Proxy(_)) => "app-server proxy",
         Some(AppServerSubcommand::GenerateTs(_)) => "app-server generate-ts",
@@ -2772,12 +2691,6 @@ mod tests {
     }
 
     #[test]
-    fn update_parses_as_update_subcommand() {
-        let cli = MultitoolCli::try_parse_from(["codex", "update"]).expect("parse");
-        assert!(matches!(cli.subcommand, Some(Subcommand::Update)));
-    }
-
-    #[test]
     fn archive_merges_scoped_tui_flags() {
         let (target, interactive, remote) = finalize_archive_from_args(
             [
@@ -2921,7 +2834,6 @@ mod tests {
                 .map(ThreadId::from_string)
                 .map(Result::unwrap),
             thread_name: thread_name.map(str::to_string),
-            update_action: None,
             exit_reason: ExitReason::UserRequested,
         }
     }
@@ -2932,7 +2844,6 @@ mod tests {
             token_usage: TokenUsage::default(),
             thread_id: None,
             thread_name: None,
-            update_action: None,
             exit_reason: ExitReason::UserRequested,
         };
         let lines = format_exit_messages(exit_info, /*color_enabled*/ false);

@@ -156,8 +156,6 @@ mod model_migration;
 mod motion;
 mod multi_agents;
 mod notifications;
-#[cfg(any(not(debug_assertions), test))]
-mod npm_registry;
 pub(crate) mod onboarding;
 mod oss_selection;
 mod pager_overlay;
@@ -192,14 +190,7 @@ mod tooltips;
 mod transcript_reflow;
 mod tui;
 mod ui_consts;
-pub(crate) mod update_action;
-pub use update_action::UpdateAction;
-#[cfg(not(debug_assertions))]
-pub use update_action::get_update_action;
-mod update_prompt;
-#[cfg(any(not(debug_assertions), test))]
-mod update_versions;
-mod updates;
+// SAKRYLLE: in-app update prompt / update-check feature removed.
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
@@ -1093,7 +1084,8 @@ pub async fn run_main(
             env!("CARGO_PKG_VERSION"),
             /*service_name_override*/ None,
             // SAKRYLLE: telemetry default off
-            /*default_analytics_enabled*/ false,
+            /*default_analytics_enabled*/
+            false,
         )
     })) {
         Ok(Ok(otel)) => otel,
@@ -1311,8 +1303,6 @@ async fn run_ratatui_app(
     let uses_remote_workspace = app_server_target.uses_remote_workspace();
     color_eyre::install()?;
 
-    tooltips::announcement::prewarm();
-
     // SAKRYLLE: Check for credentials BEFORE TUI initialization
     // (TUI puts terminal in raw mode which blocks stdin reads)
     if !initial_config.model_provider.requires_openai_auth
@@ -1325,13 +1315,11 @@ async fn run_ratatui_app(
             .is_some();
 
         if !has_api_key {
-            let codex_home = codex_utils_home_dir::find_codex_home()
-                .unwrap_or_else(|_| {
-                    let mut p = dirs::home_dir().unwrap_or_default();
-                    p.push(".sakrylle-cli");
-                    codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(p)
-                        .unwrap()
-                });
+            let codex_home = codex_utils_home_dir::find_codex_home().unwrap_or_else(|_| {
+                let mut p = dirs::home_dir().unwrap_or_default();
+                p.push(".sakrylle-cli");
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(p).unwrap()
+            });
             let auth_file = codex_home.join("auth.json");
             let has_oauth_token = auth_file.exists()
                 && std::fs::read_to_string(&auth_file)
@@ -1405,13 +1393,9 @@ async fn run_ratatui_app(
                     eprintln!("  Opening browser for login...");
                     eprintln!();
 
-                    let exe = std::env::current_exe()
-                        .unwrap_or_else(|_| "sakrylle".into());
+                    let exe = std::env::current_exe().unwrap_or_else(|_| "sakrylle".into());
 
-                    match std::process::Command::new(&exe)
-                        .arg("login")
-                        .status()
-                    {
+                    match std::process::Command::new(&exe).arg("login").status() {
                         Ok(status) if status.success() => {
                             eprintln!("  Login successful! Continuing...");
                         }
@@ -1449,28 +1433,6 @@ async fn run_ratatui_app(
         initialized_terminal.stderr_guard,
     );
     let mut terminal_restore_guard = TerminalRestoreGuard::new();
-
-    #[cfg(not(debug_assertions))]
-    {
-        use crate::update_prompt::UpdatePromptOutcome;
-
-        let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
-        if !skip_update_prompt {
-            match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
-                UpdatePromptOutcome::Continue => {}
-                UpdatePromptOutcome::RunUpdate(action) => {
-                    terminal_restore_guard.restore()?;
-                    return Ok(AppExitInfo {
-                        token_usage: crate::token_usage::TokenUsage::default(),
-                        thread_id: None,
-                        thread_name: None,
-                        update_action: Some(action),
-                        exit_reason: ExitReason::UserRequested,
-                    });
-                }
-            }
-        }
-    }
 
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
@@ -1536,13 +1498,11 @@ async fn run_ratatui_app(
 
         if !has_credentials {
             // Check for OAuth token in auth.json
-            let codex_home = codex_utils_home_dir::find_codex_home()
-                .unwrap_or_else(|_| {
-                    let mut p = dirs::home_dir().unwrap_or_default();
-                    p.push(".sakrylle-cli");
-                    codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(p)
-                        .unwrap()
-                });
+            let codex_home = codex_utils_home_dir::find_codex_home().unwrap_or_else(|_| {
+                let mut p = dirs::home_dir().unwrap_or_default();
+                p.push(".sakrylle-cli");
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(p).unwrap()
+            });
             let auth_file = codex_home.join("auth.json");
             let has_oauth_token = auth_file.exists()
                 && std::fs::read_to_string(&auth_file)
@@ -1592,7 +1552,6 @@ async fn run_ratatui_app(
                 token_usage: crate::token_usage::TokenUsage::default(),
                 thread_id: None,
                 thread_name: None,
-                update_action: None,
                 exit_reason: ExitReason::UserRequested,
             });
         }
@@ -1642,7 +1601,6 @@ async fn run_ratatui_app(
             token_usage: crate::token_usage::TokenUsage::default(),
             thread_id: None,
             thread_name: None,
-            update_action: None,
             exit_reason: ExitReason::Fatal(format!(
                 "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
             )),
@@ -1699,7 +1657,6 @@ async fn run_ratatui_app(
                         token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
-                        update_action: None,
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
@@ -1760,7 +1717,6 @@ async fn run_ratatui_app(
                     token_usage: crate::token_usage::TokenUsage::default(),
                     thread_id: None,
                     thread_name: None,
-                    update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 });
             }
@@ -1805,7 +1761,6 @@ async fn run_ratatui_app(
                             token_usage: crate::token_usage::TokenUsage::default(),
                             thread_id: None,
                             thread_name: None,
-                            update_action: None,
                             exit_reason: ExitReason::UserRequested,
                         });
                     }
@@ -2120,7 +2075,11 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
         if config.model_provider.env_key.is_some() {
             // Check if the API key env var is set
             let env_key = config.model_provider.env_key.as_ref().unwrap();
-            if std::env::var(env_key).ok().filter(|v| !v.trim().is_empty()).is_none() {
+            if std::env::var(env_key)
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .is_none()
+            {
                 // No API key set, show login screen
                 return login_status == LoginStatus::NotAuthenticated;
             }
