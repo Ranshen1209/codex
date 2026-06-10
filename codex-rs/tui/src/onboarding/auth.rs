@@ -15,8 +15,8 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginAccountResponse;
-use codex_login::read_openai_api_key_from_env;
 use codex_login::SAKRYLLE_API_KEY_ENV_VAR;
+use codex_login::read_openai_api_key_from_env;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -570,15 +570,7 @@ impl AuthModeWidget {
                 .into(),
             "".into(),
             "  Powered by your Sakrylle account".into(),
-            Line::from(vec![
-                "  Uses your plan's rate limits and ".into(),
-                crate::terminal_hyperlinks::osc8_hyperlink(
-                    "https://chatgpt.com/#settings",
-                    "training data preferences",
-                )
-                .underlined(),
-            ])
-            .dim(),
+            "  Uses your plan's rate limits.".dim().into(),
             "".into(),
             Line::from(vec![
                 "  Press ".fg(Color::Cyan),
