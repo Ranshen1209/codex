@@ -2574,7 +2574,7 @@ fn provider_reachability_plan_from_parts(
             route_probe_url: provider_route_probe_url,
         }],
         ProviderAuthReachabilityMode::Chatgpt => vec![ReachabilityEndpoint {
-            label: "ChatGPT".to_string(),
+            label: "Sakrylle".to_string(),
             url: chatgpt_base_url.to_string(),
             required: true,
             route_probe_url: None,

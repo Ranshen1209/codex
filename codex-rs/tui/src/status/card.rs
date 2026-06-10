@@ -726,7 +726,7 @@ impl HistoryCell for StatusHistoryCell {
                 (Some(email), Some(plan)) => format!("{email} ({plan})"),
                 (Some(email), None) => email.clone(),
                 (None, Some(plan)) => plan.clone(),
-                (None, None) => "ChatGPT".to_string(),
+                (None, None) => "Sakrylle".to_string(),
             },
             // SAKRYLLE: brand replacement
             StatusAccountDisplay::ApiKey => {

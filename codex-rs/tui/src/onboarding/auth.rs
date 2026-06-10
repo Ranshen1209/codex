@@ -547,7 +547,7 @@ impl AuthModeWidget {
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
         // SAKRYLLE: brand replacement
         let lines = vec![
-            "✓ Signed in with your ChatGPT account"
+            "✓ Signed in with your Sakrylle account"
                 .fg(Color::Green)
                 .into(),
             "".into(),
@@ -569,7 +569,7 @@ impl AuthModeWidget {
                 .dim()
                 .into(),
             "".into(),
-            "  Powered by your ChatGPT account".into(),
+            "  Powered by your Sakrylle account".into(),
             Line::from(vec![
                 "  Uses your plan's rate limits and ".into(),
                 crate::terminal_hyperlinks::osc8_hyperlink(
@@ -594,7 +594,7 @@ impl AuthModeWidget {
 
     fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
-            "✓ Signed in with your ChatGPT account"
+            "✓ Signed in with your Sakrylle account"
                 .fg(Color::Green)
                 .into(),
         ];
