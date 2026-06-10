@@ -85,8 +85,6 @@ pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
 }
 
-const TRUSTED_ACCESS_FOR_CYBER_URL: &str = "https://chatgpt.com/cyber";
-
 #[derive(Debug)]
 pub(crate) struct CyberPolicyNoticeCell;
 
@@ -107,23 +105,13 @@ impl HistoryCell for CyberPolicyNoticeCell {
 
         let wrap_width = width.saturating_sub(2).max(1) as usize;
         let body = Line::from(vec![
-            "  If this seems wrong, try rephrasing your request. To get authorized for security work, join the "
-                .dim(),
-            "Trusted Access for Cyber".cyan().underlined(),
-            " program.".dim(),
+            "  If this seems wrong, try rephrasing your request.".dim(),
         ]);
         let wrapped = adaptive_wrap_line(
             &body,
             RtOptions::new(wrap_width).subsequent_indent("  ".into()),
         );
         push_owned_lines(&wrapped, &mut lines);
-        lines.push(
-            vec![
-                "  ".into(),
-                TRUSTED_ACCESS_FOR_CYBER_URL.cyan().underlined(),
-            ]
-            .into(),
-        );
 
         lines
     }
@@ -132,9 +120,8 @@ impl HistoryCell for CyberPolicyNoticeCell {
         vec![
             Line::from("This chat was flagged for possible cybersecurity risk"),
             Line::from(
-                "If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program.",
+                "If this seems wrong, try rephrasing your request.",
             ),
-            Line::from(TRUSTED_ACCESS_FOR_CYBER_URL),
         ]
     }
 

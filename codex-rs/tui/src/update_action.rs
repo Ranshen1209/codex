@@ -2,8 +2,6 @@
 use codex_install_context::InstallContext;
 #[cfg(any(not(debug_assertions), test))]
 use codex_install_context::InstallMethod;
-#[cfg(any(not(debug_assertions), test))]
-use codex_install_context::StandalonePlatform;
 
 /// Update action the CLI should perform after the TUI exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,10 +12,6 @@ pub enum UpdateAction {
     BunGlobalLatest,
     /// Update via `brew upgrade codex`.
     BrewUpgrade,
-    /// Update via `curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh`.
-    StandaloneUnix,
-    /// Update via `$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex`.
-    StandaloneWindows,
 }
 
 impl UpdateAction {
@@ -27,11 +21,9 @@ impl UpdateAction {
             InstallMethod::Npm => Some(UpdateAction::NpmGlobalLatest),
             InstallMethod::Bun => Some(UpdateAction::BunGlobalLatest),
             InstallMethod::Brew => Some(UpdateAction::BrewUpgrade),
-            InstallMethod::Standalone { platform, .. } => Some(match platform {
-                StandalonePlatform::Unix => UpdateAction::StandaloneUnix,
-                StandalonePlatform::Windows => UpdateAction::StandaloneWindows,
-            }),
-            InstallMethod::Other => None,
+            // No Sakrylle installer script exists; fall back to the generic
+            // "see GitHub releases" notice path (update_action = None).
+            InstallMethod::Standalone { .. } | InstallMethod::Other => None,
         }
     }
 
@@ -41,22 +33,6 @@ impl UpdateAction {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
-            UpdateAction::StandaloneUnix => (
-                "sh",
-                &[
-                    "-c",
-                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
-                ],
-            ),
-            UpdateAction::StandaloneWindows => (
-                "powershell",
-                &[
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-c",
-                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
-                ],
-            ),
         }
     }
 
@@ -113,53 +89,44 @@ mod tests {
             }),
             Some(UpdateAction::BrewUpgrade)
         );
+        // Standalone installs have no Sakrylle installer script; return None so
+        // the generic "see GitHub releases" notice is shown instead.
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext {
                 method: InstallMethod::Standalone {
-                    platform: StandalonePlatform::Unix,
+                    platform: codex_install_context::StandalonePlatform::Unix,
                     release_dir: native_release_dir.clone(),
                     resources_dir: Some(native_release_dir.join("codex-resources")),
                 },
                 package_layout: None,
             }),
-            Some(UpdateAction::StandaloneUnix)
+            None
         );
         assert_eq!(
             UpdateAction::from_install_context(&InstallContext {
                 method: InstallMethod::Standalone {
-                    platform: StandalonePlatform::Windows,
+                    platform: codex_install_context::StandalonePlatform::Windows,
                     release_dir: native_release_dir.clone(),
                     resources_dir: Some(native_release_dir.join("codex-resources")),
                 },
                 package_layout: None,
             }),
-            Some(UpdateAction::StandaloneWindows)
+            None
         );
     }
 
     #[test]
-    fn standalone_update_commands_rerun_latest_installer() {
-        assert_eq!(
-            UpdateAction::StandaloneUnix.command_args(),
-            (
-                "sh",
-                &[
-                    "-c",
-                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
-                ][..],
-            )
-        );
-        assert_eq!(
-            UpdateAction::StandaloneWindows.command_args(),
-            (
-                "powershell",
-                &[
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-c",
-                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex"
-                ][..],
-            )
-        );
+    fn managed_install_update_commands_do_not_contain_chatgpt_urls() {
+        for action in [
+            UpdateAction::NpmGlobalLatest,
+            UpdateAction::BunGlobalLatest,
+            UpdateAction::BrewUpgrade,
+        ] {
+            let cmd = action.command_str();
+            assert!(
+                !cmd.contains("chatgpt.com"),
+                "update command for {action:?} must not reference chatgpt.com: {cmd}"
+            );
+        }
     }
 }

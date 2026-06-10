@@ -632,7 +632,7 @@ async fn status_snapshot_shows_active_user_defined_profile() {
 }
 
 #[tokio::test]
-async fn status_model_provider_uses_bedrock_runtime_base_url_and_gates_usage_link() {
+async fn status_model_provider_uses_bedrock_runtime_base_url() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
     config.model_provider_id = "amazon-bedrock".to_string();
@@ -680,9 +680,10 @@ async fn status_model_provider_uses_bedrock_runtime_base_url_and_gates_usage_lin
         !rendered.contains("bedrock-mantle.us-east-1"),
         "expected /status to ignore configured Bedrock base URL, got: {rendered}"
     );
+    // The ChatGPT usage link is removed; no provider should surface it.
     assert!(
-        !rendered.contains("https://chatgpt.com/codex/settings/usage"),
-        "expected /status to hide ChatGPT usage link for Bedrock, got: {rendered}"
+        !rendered.contains("chatgpt.com"),
+        "expected /status to never show chatgpt.com links, got: {rendered}"
     );
 
     config.model_provider_id = "openai-proxy".to_string();
@@ -713,29 +714,21 @@ async fn status_model_provider_uses_bedrock_runtime_base_url_and_gates_usage_lin
     );
     let rendered = render_lines(&composite.display_lines(/*width*/ 120)).join("\n");
 
+    // Usage link is removed even for OpenAI-auth providers.
     assert!(
-        rendered.contains("https://chatgpt.com/codex/settings/usage"),
-        "expected /status to show ChatGPT usage link for OpenAI-auth proxy, got: {rendered}"
+        !rendered.contains("chatgpt.com"),
+        "expected /status to never show chatgpt.com links, got: {rendered}"
     );
 
-    let wide_destinations: Vec<String> = composite
+    // No chatgpt.com hyperlinks should be emitted.
+    let destinations: Vec<String> = composite
         .display_hyperlink_lines(/*width*/ 120)
         .into_iter()
         .flat_map(|line| line.hyperlinks.into_iter())
         .map(|link| link.destination)
+        .filter(|d| d.contains("chatgpt.com"))
         .collect();
-    assert_eq!(
-        wide_destinations,
-        vec!["https://chatgpt.com/codex/settings/usage"]
-    );
-
-    let narrow_destinations: Vec<String> = composite
-        .display_hyperlink_lines(/*width*/ 24)
-        .into_iter()
-        .flat_map(|line| line.hyperlinks.into_iter())
-        .map(|link| link.destination)
-        .collect();
-    assert_eq!(narrow_destinations, Vec::<String>::new());
+    assert_eq!(destinations, Vec::<String>::new());
 }
 
 #[tokio::test]
