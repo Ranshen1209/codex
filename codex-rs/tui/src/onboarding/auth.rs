@@ -442,7 +442,7 @@ impl AuthModeWidget {
                     lines.extend(create_mode_item(
                         idx,
                         option,
-                        "Sign in with ChatGPT",
+                        "Sign in with Sakrylle",
                         chatgpt_description,
                     ));
                 }
@@ -468,7 +468,7 @@ impl AuthModeWidget {
 
         if !self.is_api_login_allowed() {
             lines.push(
-                "  API key login is disabled by this workspace. Sign in with ChatGPT to continue."
+                "  API key login is disabled by this workspace. Sign in with Sakrylle to continue."
                     .dim()
                     .into(),
             );
