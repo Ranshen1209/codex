@@ -13,7 +13,6 @@ use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
 use serde_json::json;
 use std::ffi::OsString;
 use tempfile::TempDir;
@@ -62,16 +61,20 @@ async fn logout_with_revoke_revokes_refresh_token_then_removes_auth() -> Result<
         .await
         .context("failed to fetch revoke requests")?;
     assert_eq!(requests.len(), 1);
-    assert_eq!(
-        requests[0]
-            .body_json::<Value>()
-            .context("revoke request should be JSON")?,
-        json!({
-            "token": REFRESH_TOKEN,
-            "token_type_hint": "refresh_token",
-            "client_id": CLIENT_ID,
-        })
-    );
+    let body = String::from_utf8(requests[0].body.clone())
+        .context("revoke request body should be UTF-8")?;
+    let mut params: Vec<(&str, &str)> = body
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .collect();
+    params.sort();
+    let mut expected = vec![
+        ("client_id", CLIENT_ID),
+        ("token", REFRESH_TOKEN),
+        ("token_type_hint", "refresh_token"),
+    ];
+    expected.sort();
+    assert_eq!(params, expected);
     server.verify().await;
     Ok(())
 }
@@ -162,16 +165,20 @@ async fn auth_manager_logout_with_revoke_uses_cached_auth() -> Result<()> {
         .await
         .context("failed to fetch revoke requests")?;
     assert_eq!(requests.len(), 1);
-    assert_eq!(
-        requests[0]
-            .body_json::<Value>()
-            .context("revoke request should be JSON")?,
-        json!({
-            "token": REFRESH_TOKEN,
-            "token_type_hint": "refresh_token",
-            "client_id": CLIENT_ID,
-        })
-    );
+    let body = String::from_utf8(requests[0].body.clone())
+        .context("revoke request body should be UTF-8")?;
+    let mut params: Vec<(&str, &str)> = body
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .collect();
+    params.sort();
+    let mut expected = vec![
+        ("client_id", CLIENT_ID),
+        ("token", REFRESH_TOKEN),
+        ("token_type_hint", "refresh_token"),
+    ];
+    expected.sort();
+    assert_eq!(params, expected);
     server.verify().await;
     Ok(())
 }
