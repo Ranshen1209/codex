@@ -46,13 +46,19 @@ Canonical platform status lives in [Sakrylle OIDC current state](../../sub2api/s
 - ✅ npm 平台子包映射 `@openai/codex-*` → `@sakrylle/cli-*`（`codex-cli/bin/codex.js`）。
 - ✅ `cloud-tasks` 未登录提示 + 命令名（`codex`→`sakrylle`）。
 
-⚠️ **全量深度去品牌 —— 独立后续专项（deferred）**：
-- 审计（2026-06-10）显示 `codex-rs` 非测试源码仍有 **约 660 处** 含 `Codex`/`OpenAI`/`ChatGPT` 的用户可见字符串，分布在 **约 185 个文件**。本轮只处理了高价值/明确项。
-- 剩余项分三类，**不宜逐串手改**，建议作为专项用脚本化批量替换 + 人工核对：
-  1. **纯 cosmetic 文案**（大多数）—— 可批量替换。
-  2. **基础设施/归属 URL**：`github.com/openai/codex` 的 release-notes（`update_prompt.rs`）、feedback issue（`feedback_view.rs`）、安装提示（`history_cell/notices.rs`）等 —— 需真实 Sakrylle 仓库/域名才能替换（不可臆造）。
-  3. **功能性端点**：`chatgpt.com/backend-api/` 基址、OAuth/`chatgpt.com/device` 设备授权、`chatgpt.com/#settings` —— 多为被 Sakrylle OIDC 路径取代的 legacy/测试代码（疑似死代码），改前须逐一确认是否仍可达。
-- 已禁用的 `codex_apps` MCP 客户端相关的 ChatGPT "Apps" UI 字符串（`app_link_view.rs` / `chatwidget/plugins.rs` / `codex-mcp/auth_elicitation.rs`）属不可达死代码，归入此专项一并处理。
+⚠️ **全量深度去品牌 —— 独立后续专项（进行中，2026-06-10 第二轮）**：
+
+第二轮（deep-rebrand 分支 `sakrylle/deep-rebrand`）产出：
+- ✅ **权威残留清单**：`scripts/rebrand_audit.py` + `scripts/rebrand_audit.json` + `scripts/rebrand_audit_report.md`。分桶（排除测试/注释/协议值/内部路由后）：A(cosmetic)=328、B(归属/安装 URL)=13、C(功能端点/Apps)=17、SKIP=2530，actionable_files=147。
+- ✅ **可达性核实推翻了「死代码」假设**：多处桶 C 实为 **live**——Apps UI（`app_link_view.rs` 仍接入 app 事件循环）、`CYBER_VERIFY_URL`（session 回退错误消息在用）、Remote Control 主机白名单（live CLI 子命令）、OTEL statsig 端点（在用）、announcement-tip 远程拉取、daemon 自更新。按安全门控 **停下回报，不静默删坏**。
+- ✅ **已执行的安全去品牌**（display-only，已 `cargo build` 三 crate 通过 + `cargo fmt`）：`onboarding/auth.rs` 移除 `chatgpt.com/#settings` 链接；`core/session_rollout_init_error.rs` 4 条错误文案 Codex→Sakrylle；`cli/state_db_recovery.rs` 全部用户可见 `eprintln!` 诊断 + `codex doctor`→`sakrylle doctor`。
+- ✅ **第二轮：按操作者决策移除 4 个 live 上游功能**（均已验证：相关 crate `cargo build`/`--tests` 通过，定向测试通过）：
+  - **telemetry**：删除 `otel/config.rs` 的 `ab.chatgpt.com/otlp` 端点 + statsig key；`Statsig` exporter 恒解析为「不导出」（保留 enum 变体以兼容 provider/默认值；用户自配 OTLP 不受影响）。
+  - **公告 + "Codex App" 推广**：删除 `tooltips.rs` 的 `ANNOUNCEMENT_TIP_URL` 远程拉取整段 announcement 子模块 + `prewarm()`、`APP_TOOLTIP`/`OTHER_TOOLTIP` 推广、`tooltips.txt` 的 codex-app 行；保留通用 tooltip + Fast 提示。
+  - **反馈（Option A：仅 UI）**：删除 `feedback_view.rs` + 12 快照、`/feedback` slash 命令、`FeedbackCategory`/4 个 AppEvent、ChatWidget UI 方法、`FeedbackAudience`、提交链路。**保留**（load-bearing）`codex-feedback` 遥测/日志骨干、app-server `feedback/upload` v2 RPC（避免改 wire/schema，本环境无 `just`）、`config.feedback_enabled`。CLI 不再向 github.com/openai/codex 提交。
+  - **应用内更新 + daemon 自更新**：删除 `update_action/update_prompt/updates/update_versions/npm_registry` 模块、`UpdateAvailableHistoryCell`、`cli/doctor/updates`、`app-server-daemon/update_loop`、`Update`/`PidUpdateLoop` 子命令、daemon 自更新接线、`lib.rs` 的 `chatgpt.com/codex/install.sh` 安装提示。`check_for_update_on_startup` 配置字段保留（读而不用，删除需 schema 重生成）；`app-server-daemon/Cargo.toml` 残留未用的 `reqwest`/`sha2`（删除需 bazel-lock 刷新）。
+- ⏳ **交回操作者**：见 `docs/superpowers/2026-06-10-sakrylle-deep-rebrand-handoff.md` —— 含 (1) 仍待决策的 live 项（Apps UI、cyber、remote-control、usage-limit 文案、app-server `feedback/upload` RPC——需真实 Sakrylle URL/host 或改 v2 schema，不可臆造)；(2) must-not-change 清单（HTTP headers、provider id、env 键、issuer、内部路由、MCP 工具名）；(3) 剩余桶 A 分类（平台标识需跨平台构建核验、doctor 诊断串与内联测试耦合、模型面 prompt 文本属行为决策）；(4) 5 项真实环境/审批/多平台/发布手动验收。
+- `update_action.rs` 的 `@openai/codex` 是**功能性**更新命令（非 cosmetic），应改为已确立的 `@sakrylle/cli` 或停用更新功能——交产品决策，未盲改。
 - `agent-identity` 的 JWT issuer 常量（`chatgpt.com/codex-backend/...`）是协议/基础设施值，**不应**作为文案改动（改动会破坏 agent-identity 验签）。
 
 ## Phase 5: oidc-docs updates — ✅ Done
