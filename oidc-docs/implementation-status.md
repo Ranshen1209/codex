@@ -8,7 +8,7 @@ last_verified: 2026-06-10
 
 # Sakrylle CLI Implementation Status
 
-Current status: **Phase 1–3 代码完成（OIDC 严格验证 + 设备授权 + 登录流自动化测试覆盖）。品牌化主体已改，但全量去品牌为独立后续专项（见 Phase 4）。真实环境验证与生产发布为手动收尾项。**
+Current status: **Phase 1–3 代码完成（OIDC 严格验证 + 设备授权 + 登录流自动化测试覆盖）。品牌化：主体已改；深度去品牌专项第二轮已落地——权威残留审计 + 安全文案去品牌 + 按操作者决策移除 4 个 live 上游功能（更新/反馈 UI/telemetry/公告），均验证编译通过（分支 `sakrylle/deep-rebrand`，5 个 commit，未 push）。剩余 live 项（Apps UI、cyber、remote-control、usage-limit 文案、app-server feedback/upload RPC）与真实环境/发布为手动收尾项，见 Phase 4 + handoff。**
 
 Canonical platform status lives in [Sakrylle OIDC current state](../../sub2api/sakrylle-docs/10-platform-identity/current-state.md). This file only tracks product-local readiness and gaps.
 
@@ -36,7 +36,7 @@ Canonical platform status lives in [Sakrylle OIDC current state](../../sub2api/s
 - 登录流自动化覆盖补强（`codex-rs/login/src/oidc.rs` 单测）：ES256 正向验签、HS256 算法降级拒绝（验证 `ALLOWED_ID_TOKEN_ALGS`）、nonce 不符拒绝。refresh rotation 拒绝已由 `tests/suite/auth_refresh.rs` 覆盖。
 - ⚠️ 真实 staging/生产 Sakrylle API 的端到端契约（真实 token、真实计费）仍为手动验收项（见文末）。
 
-## Phase 4: Brand cleanup — ⚠️ 目标项已改，全量去品牌为独立后续专项
+## Phase 4: Brand cleanup — ⚠️ 第一轮目标项 + 第二轮（审计/安全去品牌/移除 4 个 live 功能）已落地；剩余 live 项与桶 A 长尾仍为专项
 
 已完成（本轮，均经测试/快照校验）：
 - ✅ 设备码登录提示（`device_code_auth.rs`）：去 "Welcome to Codex / OpenAI's command-line coding agent / sign in with ChatGPT"。

@@ -1,8 +1,8 @@
 # Sakrylle Deep-Rebrand — Operator Handoff
 
 **Date:** 2026-06-10
-**Branch:** `sakrylle/deep-rebrand` (off `sakrylle/finishing-oidc-branding`)
-**Status:** authoritative audit complete; safe display-only debrand executed; the remainder requires product decisions, real Sakrylle URLs/endpoints, real credentials, or multi-platform machines and is documented below. **No URLs/credentials/results were invented.**
+**Branch:** `sakrylle/deep-rebrand` (off `sakrylle/finishing-oidc-branding`) — **committed (5 commits), not pushed.**
+**Status:** authoritative audit complete; safe display-only debrand done; the operator-approved removal of the update / feedback (UI) / telemetry / announcement features is done and verified (all touched crates + test builds compile, targeted tests pass). The remainder (below) requires product decisions, real Sakrylle URLs/endpoints, real credentials, or multi-platform machines. **No URLs/credentials/results were invented.**
 
 Authoritative residue list: `scripts/rebrand_audit.py` → `scripts/rebrand_audit.json` + `scripts/rebrand_audit_report.md`. Re-run `python3 scripts/rebrand_audit.py` after any change to refresh.
 
@@ -10,22 +10,31 @@ Audit summary (after exclusions): **A(cosmetic)=328, B(attribution/install URLs)
 
 ---
 
-## 1. What was changed in this run (safe, no product decision needed)
+## 1. What was changed (committed on `sakrylle/deep-rebrand`)
 
-All edits are display-only user-facing cosmetic text; none touch protocol values, routing, or feature behavior.
+Five commits (newest last); not pushed:
+
+| Commit | Summary |
+|---|---|
+| `4691e8d` | `chore(rebrand)`: audit tooling (`scripts/rebrand_audit.*`) + deep-rebrand spec/plan/handoff + status sync |
+| `c0cf92a` | `style(login)`: rustfmt from prior OIDC work (4 files) |
+| `1c3e4b0` | `brand(otel)`: remove `ab.chatgpt.com` statsig telemetry exporter |
+| `7498d99` | `brand`: debrand safe user-facing strings (onboarding link, db/session diagnostics) |
+| `04e59b7` | `rebrand!`: remove upstream update, feedback UI, and announcement features |
+
+### 1a. Safe display-only debrand (commit `7498d99` — no product decision needed)
 
 | File | Change |
 |---|---|
-| `tui/src/onboarding/auth.rs:573-581` | Removed the `https://chatgpt.com/#settings` "training data preferences" hyperlink; replaced with plain `"Uses your plan's rate limits."` (block already said "Powered by your Sakrylle account"). |
+| `tui/src/onboarding/auth.rs` | Removed the `https://chatgpt.com/#settings` "training data preferences" hyperlink; replaced with plain `"Uses your plan's rate limits."` (block already said "Powered by your Sakrylle account"). |
 | `core/src/session_rollout_init_error.rs` | 4 user-facing error hints `Codex`→`Sakrylle` ("Sakrylle cannot access session files…", "…different Sakrylle home", "…so Sakrylle can create sessions", "…directory Sakrylle can use…"). |
 | `cli/src/state_db_recovery.rs` | All user-facing `eprintln!` diagnostics `Codex`→`Sakrylle`; `Run \`codex doctor\``→`Run \`sakrylle doctor\``. Internal `codex-repair-<ts>` temp-file suffix left unchanged. |
 
-Plus pre-existing rustfmt-only changes in 4 `login/` files (cosmetic, from prior OIDC work).
+### 1b. Telemetry removal (commit `1c3e4b0`) and feature removals (commit `04e59b7`)
 
-**Suggested commit grouping** (commits not made — per CLAUDE.md, commit only on operator request):
-1. `chore(rebrand): add authoritative brand-residue audit` — `scripts/rebrand_audit.*`, `docs/superpowers/specs/2026-06-10-sakrylle-cli-deep-rebrand-design.md`, `docs/superpowers/plans/2026-06-10-sakrylle-deep-rebrand.md`.
-2. `brand: debrand safe user-facing strings (onboarding link, db/session diagnostics)` — the 3 source files above.
-3. `style(login): apply rustfmt` — the 4 login files.
+See §2 "Removed this round" for the full per-feature detail (telemetry, announcement + Codex App promos, feedback UI, in-app/daemon update). The three feature removals share `tui/src/lib.rs`/`app.rs`, so they could not be split into separate commits and landed together in `04e59b7` (marked `BREAKING CHANGE`).
+
+> **Not pushed.** Pushing to `Ranshen1209/sakrylle-cli` is an outward action awaiting operator confirmation.
 
 ---
 

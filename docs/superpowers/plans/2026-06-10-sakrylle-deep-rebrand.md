@@ -1,5 +1,7 @@
 # Sakrylle Deep-Rebrand Implementation Plan
 
+> **STATUS (2026-06-10): EXECUTED.** Audit + safe debrand + operator-approved removal of the update/feedback-UI/telemetry/announcement features are done, verified, and committed on `sakrylle/deep-rebrand` (5 commits, not pushed). See `docs/superpowers/2026-06-10-sakrylle-deep-rebrand-handoff.md` for the current state and remaining operator decisions. This plan is retained as the original pre-execution design.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Remove user-visible OpenAI/Codex/ChatGPT branding and dead upstream links from Sakrylle CLI, without breaking protocol values, config loading, or live functionality.
