@@ -405,11 +405,12 @@ async fn process_request(
             if let Some(error_code) = params.get("error") {
                 let error_description = params.get("error_description").map(String::as_str);
                 let message = oauth_callback_error_message(error_code, error_description);
-                let safe_error_description = if is_missing_codex_entitlement_error(error_code, error_description) {
-                    None
-                } else {
-                    error_description
-                };
+                let safe_error_description =
+                    if is_missing_codex_entitlement_error(error_code, error_description) {
+                        None
+                    } else {
+                        error_description
+                    };
                 eprintln!("OAuth callback error: {message}");
                 warn!(
                     error_code,
@@ -436,72 +437,78 @@ async fn process_request(
             };
 
             // SAKRYLLE: OIDC login — use discovery token_endpoint
-            match exchange_code_for_tokens(&discovery.token_endpoint, &opts.client_id, redirect_uri, pkce, &code)
-                .await
+            match exchange_code_for_tokens(
+                &discovery.token_endpoint,
+                &opts.client_id,
+                redirect_uri,
+                pkce,
+                &code,
+            )
+            .await
             {
-                Ok(tokens) => match verify_id_token(
-                    &tokens.id_token,
-                    discovery,
-                    &opts.client_id,
-                    Some(nonce),
-                )
-                .await
-                {
-                    Ok(verified_id_token) => {
-                        if let Err(message) = ensure_workspace_allowed(
-                            opts.forced_chatgpt_workspace_id.as_deref(),
-                            &verified_id_token.raw,
-                        ) {
-                            eprintln!("Workspace restriction error: {message}");
-                            return login_error_response(
-                                &message,
-                                io::ErrorKind::PermissionDenied,
-                                Some("workspace_restriction"),
-                                /*error_description*/ None,
-                            );
-                        }
-                        // SAKRYLLE: OIDC login — persist tokens only after strict ID token validation.
-                        if let Err(err) = persist_tokens_async(
-                            &opts.codex_home,
-                            /*api_key*/ None,
-                            verified_id_token.raw.clone(),
-                            tokens.access_token.clone(),
-                            tokens.refresh_token.clone(),
-                            opts.cli_auth_credentials_store_mode,
-                        )
+                Ok(tokens) => {
+                    match verify_id_token(&tokens.id_token, discovery, &opts.client_id, Some(nonce))
                         .await
-                        {
-                            eprintln!("Persist error: {err}");
-                            return login_error_response(
-                                "Sign-in completed but credentials could not be saved locally.",
-                                io::ErrorKind::Other,
-                                Some("persist_failed"),
-                                Some(&err.to_string()),
-                            );
-                        }
+                    {
+                        Ok(verified_id_token) => {
+                            if let Err(message) = ensure_workspace_allowed(
+                                opts.forced_chatgpt_workspace_id.as_deref(),
+                                &verified_id_token.raw,
+                            ) {
+                                eprintln!("Workspace restriction error: {message}");
+                                return login_error_response(
+                                    &message,
+                                    io::ErrorKind::PermissionDenied,
+                                    Some("workspace_restriction"),
+                                    /*error_description*/ None,
+                                );
+                            }
+                            // SAKRYLLE: OIDC login — persist tokens only after strict ID token validation.
+                            if let Err(err) = persist_tokens_async(
+                                &opts.codex_home,
+                                /*api_key*/ None,
+                                verified_id_token.raw.clone(),
+                                tokens.access_token.clone(),
+                                tokens.refresh_token.clone(),
+                                opts.cli_auth_credentials_store_mode,
+                            )
+                            .await
+                            {
+                                eprintln!("Persist error: {err}");
+                                return login_error_response(
+                                    "Sign-in completed but credentials could not be saved locally.",
+                                    io::ErrorKind::Other,
+                                    Some("persist_failed"),
+                                    Some(&err.to_string()),
+                                );
+                            }
 
-                        // SAKRYLLE: OIDC login — redirect to local success page
-                        let success_url = format!("http://127.0.0.1:{actual_port}/success");
-                        match tiny_http::Header::from_bytes(&b"Location"[..], success_url.as_bytes()) {
-                            Ok(header) => HandledRequest::RedirectWithHeader(header),
-                            Err(_) => login_error_response(
-                                "Sign-in completed but redirecting back to the app failed.",
-                                io::ErrorKind::Other,
-                                Some("redirect_failed"),
+                            // SAKRYLLE: OIDC login — redirect to local success page
+                            let success_url = format!("http://127.0.0.1:{actual_port}/success");
+                            match tiny_http::Header::from_bytes(
+                                &b"Location"[..],
+                                success_url.as_bytes(),
+                            ) {
+                                Ok(header) => HandledRequest::RedirectWithHeader(header),
+                                Err(_) => login_error_response(
+                                    "Sign-in completed but redirecting back to the app failed.",
+                                    io::ErrorKind::Other,
+                                    Some("redirect_failed"),
+                                    /*error_description*/ None,
+                                ),
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("ID token validation error: {err}");
+                            login_error_response(
+                                &format!("ID token validation failed: {err}"),
+                                io::ErrorKind::PermissionDenied,
+                                Some("id_token_validation_failed"),
                                 /*error_description*/ None,
-                            ),
+                            )
                         }
                     }
-                    Err(err) => {
-                        eprintln!("ID token validation error: {err}");
-                        login_error_response(
-                            &format!("ID token validation failed: {err}"),
-                            io::ErrorKind::PermissionDenied,
-                            Some("id_token_validation_failed"),
-                            /*error_description*/ None,
-                        )
-                    }
-                },
+                }
                 Err(err) => {
                     eprintln!("Token exchange error: {err}");
                     error!("login callback token exchange failed");
@@ -596,7 +603,8 @@ fn build_authorize_url(
     forced_chatgpt_workspace_id: Option<&[String]>,
 ) -> String {
     // SAKRYLLE: OIDC login — aud as single-element array for sub2api
-    let aud_json = serde_json::to_string(&[client_id]).unwrap_or_else(|_| format!("[\"{client_id}\"]"));
+    let aud_json =
+        serde_json::to_string(&[client_id]).unwrap_or_else(|_| format!("[\"{client_id}\"]"));
     let mut query = vec![
         ("response_type".to_string(), "code".to_string()),
         ("client_id".to_string(), client_id.to_string()),
@@ -642,7 +650,9 @@ fn open_browser_with_fallback(url: &str) {
         return if webbrowser::open(url).is_ok() {
             info!("opened browser for login");
         } else {
-            eprintln!("Could not open browser automatically. Please open this URL manually:\n\n{url}\n");
+            eprintln!(
+                "Could not open browser automatically. Please open this URL manually:\n\n{url}\n"
+            );
         };
     };
 
@@ -653,7 +663,9 @@ fn open_browser_with_fallback(url: &str) {
         _ => {
             // Try webbrowser crate as second fallback
             if webbrowser::open(url).is_err() {
-                eprintln!("Could not open browser automatically. Please open this URL manually:\n\n{url}\n");
+                eprintln!(
+                    "Could not open browser automatically. Please open this URL manually:\n\n{url}\n"
+                );
             }
         }
     }
@@ -1273,7 +1285,6 @@ mod tests {
     use base64::Engine;
     use codex_app_server_protocol::AuthMode;
     use codex_config::types::AuthCredentialsStoreMode;
-    use serde_json::Value;
     use serde_json::json;
     use tempfile::tempdir;
     use wiremock::Mock;
@@ -1360,16 +1371,21 @@ mod tests {
             .await
             .context("failed to fetch revoke requests")?;
         assert_eq!(requests.len(), 1);
-        assert_eq!(
-            requests[0]
-                .body_json::<Value>()
-                .context("revoke request should be JSON")?,
-            json!({
-                "token": "old-refresh",
-                "token_type_hint": "refresh_token",
-                "client_id": crate::auth::CLIENT_ID,
-            })
-        );
+        // SAKRYLLE: revoke uses a form-encoded body per RFC 7009, not JSON.
+        let body = String::from_utf8(requests[0].body.clone())
+            .context("revoke request body should be UTF-8")?;
+        let mut params: Vec<(&str, &str)> = body
+            .split('&')
+            .filter_map(|kv| kv.split_once('='))
+            .collect();
+        params.sort();
+        let mut expected = vec![
+            ("client_id", crate::auth::CLIENT_ID),
+            ("token", "old-refresh"),
+            ("token_type_hint", "refresh_token"),
+        ];
+        expected.sort();
+        assert_eq!(params, expected);
         server.verify().await;
         Ok(())
     }
