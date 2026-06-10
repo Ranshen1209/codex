@@ -1,4 +1,188 @@
-# Rust/codex-rs
+# Sakrylle CLI
+
+This file provides guidance to coding agents when working with code in this repository.
+
+## Project identity
+
+This is a fork of [OpenAI's Codex CLI](https://github.com/openai/codex) rebranded as **Sakrylle CLI** (binary: `sakrylle`, alias: `skl`). Remote: `Ranshen1209/sakrylle-cli`, branch: `sakrylle/main`. Cursor rules live in `.cursor/rules/` (derived from `CLAUDE.md`). The fork adds OIDC authentication, configuration isolation, and brand replacement throughout.
+
+## Repository layout
+
+| Directory | Purpose |
+|---|---|
+| `codex-rs/` | Rust workspace (~100 crates) — the entire application |
+| `codex-cli/` | TypeScript CLI wrapper (npm package) |
+| `sdk/` | Python, Python-runtime, and TypeScript SDKs |
+| `docs/` | Contributing, install, and open-source docs |
+| `oidc-docs/` | Sakrylle OIDC implementation notes (product-local, canonical docs elsewhere) |
+| `scripts/` | Build/CI helper scripts |
+| `patches/` | Vendored dependency patches |
+
+## Build systems
+
+**Primary (local dev):** Cargo workspace at `codex-rs/Cargo.toml`. All Rust commands run from `codex-rs/`.
+
+**Secondary (CI/release):** Bazel (`MODULE.bazel`, `BUILD.bazel`). Bazel requires explicit `compile_data` / `build_script_data` entries when using `include_str!`, `include_bytes!`, or `sqlx::migrate!`.
+
+**JS tooling:** pnpm >= 10.33.0 (root `package.json`), prettier for formatting.
+
+## Common commands
+
+All run from `codex-rs/` unless noted. The `just` task runner (`justfile` in repo root) wraps everything.
+
+### Build and run
+
+```bash
+just codex -- "explain this codebase"     # cargo run --bin codex
+just exec "do something"                   # non-interactive mode
+cargo build                                # build only
+```
+
+### Format and lint
+
+```bash
+just fmt                                   # Rust + Python + justfile formatting
+just fmt-check                             # check formatting without modifying
+just fix -p <crate>                        # clippy --fix scoped to one crate
+just clippy -p <crate>                     # clippy check (no fix)
+just argument-comment-lint                 # run argument-comment convention lint
+```
+
+### Tests
+
+```bash
+just test -p <crate>                       # run tests for one crate via nextest
+just test                                  # full test suite (ask before running)
+just bench-smoke                           # benchmark smoke test (runs automatically after `just test`)
+cargo insta pending-snapshots -p codex-tui # check snapshot diffs
+cargo insta accept -p codex-tui            # accept new snapshots
+```
+
+### Schema and code generation
+
+```bash
+just write-config-schema                   # regenerate codex-rs/core/config.schema.json
+just write-app-server-schema               # regenerate app-server protocol fixtures
+just write-app-server-schema --experimental
+just write-hooks-schema                    # regenerate hooks schema
+```
+
+### Dependency management
+
+```bash
+just bazel-lock-update                     # after changing Cargo.toml/Cargo.lock
+just bazel-lock-check                      # verify lockfile is current
+```
+
+### Other
+
+```bash
+just install                               # install Rust toolchain + fetch deps
+just mcp-server-run                        # run the MCP server
+just log                                   # tail SQLite state logs
+```
+
+## Architecture
+
+### Crate naming and structure
+
+All Rust crates in `codex-rs/` are prefixed `codex-`. The crate directory `foo` corresponds to `codex-foo` in `Cargo.toml`. Utilities live under `codex-rs/utils/<name>` with crate name `codex-utils-<name>`.
+
+### Key crate dependency graph (simplified)
+
+```
+cli  ──entry point, CLAP arg parsing, subcommand dispatch
+ ├─ tui  ──interactive terminal UI (ratatui)
+ ├─ exec  ──non-interactive execution
+ ├─ app-server  ──JSON-RPC server for IDE integrations (VSCode, etc.)
+ │   ├─ app-server-protocol  ──shared types, TS codegen
+ │   ├─ app-server-client  ──client library
+ │   └─ app-server-daemon  ──daemon management
+ ├─ exec-server  ──standalone WebSocket exec server
+ └─ mcp-server  ──MCP stdio server
+
+core  ──central crate (config, agent loop, context, tool routing) — AVOID ADDING TO THIS
+ ├─ config  ──config.toml loading/editing
+ ├─ protocol  ──wire types shared across crates
+ ├─ login  ──authentication (ChatGPT, API key, OIDC device code)
+ ├─ backend-client  ──backend API communication
+ └─ codex-mcp  ──MCP connection management
+
+model-provider  ──model routing, auth provider abstraction
+models-manager  ──model catalog, refresh, bundling
+execpolicy  ──execution policy enforcement
+sandboxing / linux-sandbox / bwrap / windows-sandbox-rs  ──platform sandboxing
+connectors  ──external tool connectors
+file-search / file-watcher / file-system  ──file operations
+hooks  ──hook system (user-defined lifecycle hooks)
+plugin  ──plugin system
+state  ──SQLite-backed state persistence, migrations, logging
+
+ext/  ──extension crates
+ ├─ image-generation  ──image generation tools
+ ├─ web-search  ──web search tools
+ ├─ memories  ──memory extensions (read/write)
+ ├─ goal  ──goal tracking
+ └─ guardian  ──guardian/oversight
+```
+
+### Entry point
+
+`codex-rs/cli/src/main.rs` — defines `MultitoolCli` (root CLAP struct) with ~25 subcommands. The binary name is `sakrylle` (`bin_name = "sakrylle"`). Default path with no subcommand runs the interactive TUI.
+
+### Auth flow
+
+Multiple auth methods in `codex-rs/login/`:
+
+- ChatGPT OAuth (default interactive login)
+- API key (`--with-api-key`, reads from stdin)
+- Access token (`--with-access-token`, reads from stdin)
+- Device code OIDC flow (`--device-auth`)
+- Agent identity JWT (`CODEX_ACCESS_TOKEN` env var)
+
+The Sakrylle fork adds OIDC auto-login and interactive arrow-key login prompts on first run.
+
+### TUI architecture
+
+`codex-rs/tui/src/` — ratatui-based terminal UI. Key modules:
+
+- `app.rs` — central orchestration (keep under 800 LoC, prefer new modules)
+- `chatwidget.rs` — chat rendering (avoid adding standalone methods here)
+- `bottom_pane/` — composer, footer, input
+- `diff_render.rs` — git diff display
+- `app_server_session.rs` — remote app-server session management
+- `wrapping.rs` — text wrapping helpers
+- `styles.md` — color conventions (cyan=user tips, green=success, red=error, magenta=Codex, avoid custom colors)
+
+### App-server protocol (v2)
+
+JSON-RPC over WebSocket/stdio/Unix socket. Resource/method naming: `<resource>/<method>` with singular resource names. Payload naming: `*Params` (request), `*Response` (response), `*Notification` (notification). Fields are camelCase on the wire (`#[serde(rename_all = "camelCase")]`), except config RPCs which use snake_case. All RPC types get `#[ts(export_to = "v2/")]`. New API surface goes in v2 only, never v1.
+
+## Sakrylle fork specific
+
+- **Brand:** All user-facing strings replaced from "Codex"/"codex"/"OpenAI Codex" to "Sakrylle"/"sakrylle". CLI help, error messages, update prompts, and `bin_name` reflect this.
+- **OIDC:** OIDC RP integration for login with strict validation (`codex-rs/login/src/oidc.rs`): JWKS signature verification, issuer/audience/nonce/exp claims validation, discovery document validation. See `oidc-docs/` for local notes (canonical docs at `../../sub2api/sakrylle-docs/`).
+- **Config isolation:** `codex-rs/config/` handles profile-based config isolation (`CODEX_HOME/<name>.config.toml`).
+- **Features:** `Sakrylle` provider, `codex_apps` MCP client disabled, `image_generation` tools disabled for Sakrylle provider.
+
+## Sakrylle OIDC Documentation Governance
+
+- `oidc-docs/` in this repository is **product-local** documentation for Sakrylle CLI only.
+- Canonical platform docs live in `../../sub2api/sakrylle-docs/`, especially:
+  - `10-platform-identity/current-state.md`
+  - `10-platform-identity/rp-integration-guide.md`
+  - `10-platform-identity/commercial-boundaries.md`
+  - `10-platform-identity/configuration-isolation.md`
+- Local docs are limited to:
+  - `oidc-docs/README.md`
+  - `oidc-docs/local-integration.md`
+  - `oidc-docs/implementation-status.md`
+  - `oidc-docs/troubleshooting.md`
+  - `oidc-docs/historical/` for preserved old research/plans.
+- Do **not** copy OIDC Provider endpoints, claims policy, roadmap, risk register, or design system content into this repository. Link to the center docs instead.
+- When changing CLI auth, `SAKRYLLE_CLI_HOME`, provider defaults, OAuth/OIDC login, token storage, refresh/revoke/logout, or Responses API compatibility, update the local `oidc-docs/` notes and, when the platform contract changes, update `../../sub2api/sakrylle-docs/` too.
+
+## Rust/codex-rs
 
 In the codex-rs folder where the rust code lives:
 
