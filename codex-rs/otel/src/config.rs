@@ -6,31 +6,13 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub(crate) const STATSIG_OTLP_HTTP_ENDPOINT: &str = "https://ab.chatgpt.com/otlp/v1/metrics";
-pub(crate) const STATSIG_API_KEY_HEADER: &str = "statsig-api-key";
-pub(crate) const STATSIG_API_KEY: &str = "client-MkRuleRQBd6qakfnDYqJVR9JuXcY57Ljly3vi5JVUIO";
-
 pub(crate) fn resolve_exporter(exporter: &OtelExporter) -> OtelExporter {
     match exporter {
-        OtelExporter::Statsig => {
-            // Keep the built-in Statsig default off in debug builds so
-            // incremental local development and test runs do not emit
-            // best-effort OTEL traffic unless a test or binary opts into an
-            // explicit exporter configuration.
-            if cfg!(debug_assertions) {
-                return OtelExporter::None;
-            }
-
-            OtelExporter::OtlpHttp {
-                endpoint: STATSIG_OTLP_HTTP_ENDPOINT.to_string(),
-                headers: HashMap::from([(
-                    STATSIG_API_KEY_HEADER.to_string(),
-                    STATSIG_API_KEY.to_string(),
-                )]),
-                protocol: OtelHttpProtocol::Json,
-                tls: None,
-            }
-        }
+        // SAKRYLLE: the upstream built-in Statsig metrics exporter pointed at
+        // `ab.chatgpt.com` and is removed. The `Statsig` variant is retained for
+        // enum/config compatibility but now resolves to no export. User-configured
+        // OtlpHttp/OtlpGrpc exporters are unaffected.
+        OtelExporter::Statsig => OtelExporter::None,
         _ => exporter.clone(),
     }
 }
@@ -87,9 +69,9 @@ pub struct OtelTlsConfig {
 #[derive(Clone, Debug)]
 pub enum OtelExporter {
     None,
-    /// Statsig metrics ingestion exporter using Codex-internal defaults.
-    ///
-    /// This is intended for metrics only.
+    /// SAKRYLLE: retained for enum/config compatibility but resolves to no
+    /// export (the upstream built-in `ab.chatgpt.com` metrics exporter was
+    /// removed). See [`resolve_exporter`].
     Statsig,
     OtlpGrpc {
         endpoint: String,
@@ -110,7 +92,9 @@ mod tests {
     use super::resolve_exporter;
 
     #[test]
-    fn statsig_default_metrics_exporter_is_disabled_in_debug_builds() {
+    fn statsig_metrics_exporter_resolves_to_no_export() {
+        // SAKRYLLE: the built-in Statsig exporter (ab.chatgpt.com) was removed,
+        // so the Statsig variant must always resolve to no export.
         assert!(matches!(
             resolve_exporter(&OtelExporter::Statsig),
             OtelExporter::None
