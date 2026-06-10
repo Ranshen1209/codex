@@ -291,7 +291,10 @@ async fn device_code_login_integration_handles_usercode_http_failure() -> anyhow
     );
 
     let auth = load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)?;
-    assert!(auth.is_none(), "auth.json should not be created when login fails");
+    assert!(
+        auth.is_none(),
+        "auth.json should not be created when login fails"
+    );
     Ok(())
 }
 

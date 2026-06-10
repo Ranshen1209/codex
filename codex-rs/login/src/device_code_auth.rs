@@ -213,7 +213,11 @@ fn print_device_code_prompt(verification_url: &str, code: &str) {
 pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<DeviceCode> {
     // SAKRYLLE: OIDC login — fetch discovery to get device_authorization_endpoint
     let discovery = fetch_discovery(&opts.issuer).await?;
-    validate_discovery(&discovery, &opts.issuer, /*require_device_endpoint*/ true)?;
+    validate_discovery(
+        &discovery,
+        &opts.issuer,
+        /*require_device_endpoint*/ true,
+    )?;
     let device_auth_endpoint = discovery
         .device_authorization_endpoint
         .as_deref()
@@ -244,7 +248,11 @@ pub async fn complete_device_code_login(
 ) -> std::io::Result<()> {
     // SAKRYLLE: OIDC login — fetch discovery for token endpoint
     let discovery = fetch_discovery(&opts.issuer).await?;
-    validate_discovery(&discovery, &opts.issuer, /*require_device_endpoint*/ true)?;
+    validate_discovery(
+        &discovery,
+        &opts.issuer,
+        /*require_device_endpoint*/ true,
+    )?;
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
 
     // SAKRYLLE: OIDC login — poll the token endpoint directly (RFC 8628)

@@ -206,7 +206,8 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()?;
-    let url = format!("http://127.0.0.1:{login_port}/auth/callback?code={nonce}&state=test_state_123");
+    let url =
+        format!("http://127.0.0.1:{login_port}/auth/callback?code={nonce}&state=test_state_123");
     let resp = client.get(&url).send().await?;
     assert!(resp.status().is_success());
 
@@ -218,7 +219,8 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     let data = std::fs::read_to_string(&auth_path)?;
     let json: serde_json::Value = serde_json::from_str(&data)?;
     assert!(
-        json.get("OPENAI_API_KEY").is_none_or(serde_json::Value::is_null),
+        json.get("OPENAI_API_KEY")
+            .is_none_or(serde_json::Value::is_null),
         "OIDC login should not persist an API-key alias"
     );
     assert_eq!(json["tokens"]["access_token"], "access-123");
