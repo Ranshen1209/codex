@@ -1337,25 +1337,35 @@ async fn run_ratatui_app(
                 crossterm::terminal::enable_raw_mode().ok();
 
                 fn draw_prompt(selected: usize, options: &[&str]) {
+                    use std::io::Write;
+                    let mut err = std::io::stderr();
                     let _ = crossterm::execute!(
-                        std::io::stderr(),
+                        err,
                         crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
                         crossterm::cursor::MoveTo(0, 0)
                     );
-                    eprintln!();
-                    eprintln!("  Welcome to Sakrylle CLI");
-                    eprintln!();
-                    eprintln!("  No credentials found. Would you like to login?");
-                    eprintln!();
+                    // In raw mode the terminal does not translate "\n" into a
+                    // carriage-return + line-feed, so every line must end with
+                    // "\r\n" explicitly. Using `eprintln!` here leaves the
+                    // cursor at the previous line's column and produces a
+                    // staircase layout.
+                    let mut out = String::new();
+                    out.push_str("\r\n");
+                    out.push_str("  Welcome to Sakrylle CLI\r\n");
+                    out.push_str("\r\n");
+                    out.push_str("  No credentials found. Would you like to login?\r\n");
+                    out.push_str("\r\n");
                     for (i, option) in options.iter().enumerate() {
                         if i == selected {
-                            eprintln!("  > {}", option);
+                            out.push_str(&format!("  > {option}\r\n"));
                         } else {
-                            eprintln!("    {}", option);
+                            out.push_str(&format!("    {option}\r\n"));
                         }
                     }
-                    eprintln!();
-                    eprintln!("  (Use arrow keys to select, Enter to confirm)");
+                    out.push_str("\r\n");
+                    out.push_str("  (Use arrow keys to select, Enter to confirm)\r\n");
+                    let _ = err.write_all(out.as_bytes());
+                    let _ = err.flush();
                 }
 
                 draw_prompt(selected, &options);
@@ -1390,26 +1400,26 @@ async fn run_ratatui_app(
                 );
 
                 if selected == 0 {
-                    eprintln!("  Opening browser for login...");
+                    eprintln!("Opening browser for login...");
                     eprintln!();
 
                     let exe = std::env::current_exe().unwrap_or_else(|_| "sakrylle".into());
 
                     match std::process::Command::new(&exe).arg("login").status() {
                         Ok(status) if status.success() => {
-                            eprintln!("  Login successful! Continuing...");
+                            eprintln!("Login successful! Continuing...");
                         }
                         Ok(status) => {
-                            eprintln!("  Login failed with status: {status}");
-                            eprintln!("  You can try again later with: sakrylle login");
+                            eprintln!("Login failed with status: {status}");
+                            eprintln!("You can try again later with: sakrylle login");
                         }
                         Err(e) => {
-                            eprintln!("  Failed to start login: {e}");
-                            eprintln!("  You can try again later with: sakrylle login");
+                            eprintln!("Failed to start login: {e}");
+                            eprintln!("You can try again later with: sakrylle login");
                         }
                     }
                 } else {
-                    eprintln!("  You can login later with: sakrylle login");
+                    eprintln!("You can login later with: sakrylle login");
                 }
             }
         }
