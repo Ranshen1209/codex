@@ -3,7 +3,7 @@ title: Sakrylle CLI Implementation Status
 status: local
 scope: product-local
 canonical_source: ../../sub2api/sakrylle-docs/10-platform-identity/current-state.md
-last_verified: 2026-06-10
+last_verified: 2026-06-12
 ---
 
 # Sakrylle CLI Implementation Status
@@ -80,6 +80,21 @@ Canonical platform status lives in [Sakrylle OIDC current state](../../sub2api/s
 
 > `cargo test -p codex-login` 全绿（93 lib + 35 integration）。`/v1/responses` 契约测试以独立 target 运行（`cargo test -p codex-core --test sakrylle_responses_contract`）；注意 `cargo build --tests -p codex-core` 存在与本次无关的**既有**编译问题（某测试构造 `ModelProviderInfo` 缺 fork 新增的 `supports_image_generation` 字段），不在本次范围。
 > 既有未修项：`login/src/server.rs:271-273` 的 clippy `redundant clone`（fork OIDC 代码，预先存在）。
+
+## Production registration milestone — ✅ Verified live (2026-06-12)
+
+`sakrylle-cli` OIDC client 此前因服务端被刻意 prune 而缺失，登录报 `oauth client not found`（截图）。服务端（Sakrylle API）已按 CLI 契约重新注册并修复 discovery，本地实测全绿：
+
+| 实测项 | 结果 |
+|---|---|
+| `GET /.well-known/openid-configuration` 暴露 `device_authorization_endpoint` | ✅ `https://sub.sakrylle.com/oauth/device/code` |
+| `POST /oauth/device/code`（`client_id=sakrylle-cli` + 8 scopes）返回真实 `user_code` | ✅ 形如 `SKRY-XXXX-XXXXX`，`expires_in=600` |
+| `GET /oauth/authorize?client_id=sakrylle-cli&...`（含 PKCE S256 + `aud=["sakrylle-cli"]`） | ✅ HTTP 200，渲染登录页，不再 `oauth client not found` |
+| issuer / token / jwks 端点匹配 CLI 契约 | ✅ `iss=https://sub.sakrylle.com` |
+
+服务端注册细节（public + PKCE、loopback any-port、device flow、默认 group、commercial scopes）与 discovery 修复属平台侧，权威记录见中心文档 `../../sub2api/sakrylle-docs/10-platform-identity/`（rp-integration-guide §14/§15），本仓不复制。
+
+> ⚠️ **服务端隐患（CLI 契约相关，非本仓改动）**：Sakrylle API 方 flag 了 migration `148_*` 会以**空 `redirect_uris` + 旧 `profile:read`/`account:read` scope** 重新 seed `sakrylle-cli`，若 DB 从头迁移会覆盖当前正确注册。属平台侧风险，登记于中心风险册；CLI 侧无需改动，仅在此留指针以免遗失。
 
 ## Suggested verification
 
