@@ -93,8 +93,8 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
 const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
 const DEFAULT_CHATGPT_BACKEND_BASE_URL: &str = "https://chatgpt.com/backend-api";
 // SAKRYLLE: OIDC login — use Sakrylle issuer for token endpoints
-const REFRESH_TOKEN_URL: &str = "https://sub.sakrylle.com/oauth/token";
-pub(super) const REVOKE_TOKEN_URL: &str = "https://sub.sakrylle.com/oauth/revoke";
+const REFRESH_TOKEN_URL: &str = "https://oidc1.sakrylle.com/oauth/token";
+pub(super) const REVOKE_TOKEN_URL: &str = "https://oidc1.sakrylle.com/oauth/revoke";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
 pub const REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REVOKE_TOKEN_URL_OVERRIDE";
 static NEXT_DUMMY_AUTH_ID: AtomicU64 = AtomicU64::new(1);

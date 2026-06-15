@@ -54,7 +54,7 @@ use tracing::info;
 use tracing::warn;
 
 // SAKRYLLE: OIDC login — changed issuer and port strategy
-const DEFAULT_ISSUER: &str = "https://sub.sakrylle.com";
+const DEFAULT_ISSUER: &str = "https://oidc1.sakrylle.com";
 const SAKRYLLE_OIDC_ISSUER_ENV: &str = "SAKRYLLE_OIDC_ISSUER";
 const LOGIN_TIMEOUT_SECS: u64 = 300;
 const SAKRYLLE_CLIENT_ID: &str = "sakrylle-cli";

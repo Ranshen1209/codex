@@ -96,6 +96,19 @@ Canonical platform status lives in [Sakrylle OIDC current state](../../sub2api/s
 
 > ⚠️ **服务端隐患（CLI 契约相关，非本仓改动）**：Sakrylle API 方 flag 了 migration `148_*` 会以**空 `redirect_uris` + 旧 `profile:read`/`account:read` scope** 重新 seed `sakrylle-cli`，若 DB 从头迁移会覆盖当前正确注册。属平台侧风险，登记于中心风险册；CLI 侧无需改动，仅在此留指针以免遗失。
 
+## Issuer / endpoint host 切换 — ⏳ 待 live 验证 (2026-06-15)
+
+默认 OIDC issuer 与 token/revoke 端点 host 已从 `sub.sakrylle.com` 切到 `oidc1.sakrylle.com`；API key 门户文案改指 `ai1.sakrylle.com`。代码改动：
+
+| 项 | 旧值 | 新值 | 位置 |
+|---|---|---|---|
+| `DEFAULT_ISSUER` | `https://sub.sakrylle.com` | `https://oidc1.sakrylle.com` | `login/src/server.rs` |
+| `REFRESH_TOKEN_URL` | `…sub…/oauth/token` | `https://oidc1.sakrylle.com/oauth/token` | `login/src/auth/manager.rs` |
+| `REVOKE_TOKEN_URL` | `…sub…/oauth/revoke` | `https://oidc1.sakrylle.com/oauth/revoke` | `login/src/auth/manager.rs` |
+| API key 门户文案 | `https://sub.sakrylle.com` | `https://ai1.sakrylle.com` | `model-provider-info/src/lib.rs` |
+
+> ⚠️ 上方「Verified live (2026-06-12)」里程碑记录的是对**旧 host `sub.sakrylle.com`** 的实测，保留不动。`oidc1.sakrylle.com` 的 discovery / device / token / jwks 端点**尚未对新 host 做 live 验证**——平台侧需确认 `oidc1.sakrylle.com` 已按 CLI 契约提供 discovery 且 `iss=https://oidc1.sakrylle.com`，CLI 侧再重跑登录冒烟。`SAKRYLLE_OIDC_ISSUER` env 覆盖仍可用于非生产环境。
+
 ## Suggested verification
 
 - Verify `sakrylle` uses `~/.sakrylle-cli` rather than `~/.codex` by default.

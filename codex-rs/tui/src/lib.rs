@@ -1329,7 +1329,10 @@ async fn run_ratatui_app(
                     .is_some();
 
             if !has_oauth_token {
-                use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+                use crossterm::event::Event;
+                use crossterm::event::KeyCode;
+                use crossterm::event::KeyEventKind;
+                use crossterm::event::{self};
 
                 let options = ["Yes, login now", "No, exit"];
                 let mut selected: usize = 0;

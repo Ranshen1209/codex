@@ -33,9 +33,7 @@ impl WelcomeWidget {
         _request_frame: FrameRequester,
         _animations_enabled: bool,
     ) -> Self {
-        Self {
-            is_logged_in,
-        }
+        Self { is_logged_in }
     }
 
     pub(crate) fn update_layout_area(&self, _area: Rect) {

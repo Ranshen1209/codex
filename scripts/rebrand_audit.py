@@ -11,6 +11,7 @@ This is a *candidate* list. Per-occurrence judgment still required (esp. bucket 
 Heuristics intentionally err toward INCLUDING borderline cases (flagged) rather
 than silently dropping them.
 """
+
 from __future__ import annotations
 
 import json
@@ -23,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TARGET_DIRS = ["codex-rs", "codex-cli"]
 
 BRAND_RE = re.compile(r"Codex|OpenAI|ChatGPT|chatgpt\.com|openai/codex|@openai/codex")
+
 
 # Exclusions (paths)
 def is_excluded_path(p: Path) -> bool:
@@ -40,42 +42,66 @@ def is_excluded_path(p: Path) -> bool:
         return True
     return False
 
+
 # Preserved env / config keys (do NOT touch) — substrings
 PRESERVED_KEYS = [
-    "CODEX_HOME", "CODEX_API_KEY", "OPENAI_API_KEY", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
-    "CODEX_SANDBOX", "CODEX_ACCESS_TOKEN", "CODEX_MANAGED", "OPENAI_BASE_URL",
-    "OPENAI_ORGANIZATION", "OPENAI_PROJECT", "CODEX_API_BASE_URL", "OPENAI_DEFAULT_MODEL",
-    "CODEX_RS", "CODEX_DISABLE", "CODEX_OSS", "CODEX_CACHE", "CODEX_CONFIG",
+    "CODEX_HOME",
+    "CODEX_API_KEY",
+    "OPENAI_API_KEY",
+    "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+    "CODEX_SANDBOX",
+    "CODEX_ACCESS_TOKEN",
+    "CODEX_MANAGED",
+    "OPENAI_BASE_URL",
+    "OPENAI_ORGANIZATION",
+    "OPENAI_PROJECT",
+    "CODEX_API_BASE_URL",
+    "OPENAI_DEFAULT_MODEL",
+    "CODEX_RS",
+    "CODEX_DISABLE",
+    "CODEX_OSS",
+    "CODEX_CACHE",
+    "CODEX_CONFIG",
 ]
 
 # agent-identity / protocol issuer constants (do NOT touch)
 ISSUER_HINTS = ["codex-backend", "backend-api", "auth.openai.com", "/codex-backend/"]
 
 # Internal-symbol patterns (identifiers, not user-visible text)
-SYMBOL_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:codex|Codex|ChatGpt|chat_gpt|chatgpt)[A-Za-z0-9_]*")
+SYMBOL_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:codex|Codex|ChatGpt|chat_gpt|chatgpt)[A-Za-z0-9_]*"
+)
 
 # crude string-literal extraction for .rs / .js / .ts
 STRING_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
 
 @dataclass
 class Occurrence:
     file: str
     line: int
-    bucket: str          # A / B / C / SKIP
+    bucket: str  # A / B / C / SKIP
     reason: str
     in_string: bool
     text: str
 
+
 def classify_line(path: Path, lineno: int, line: str) -> list[Occurrence]:
     out: list[Occurrence] = []
     stripped = line.strip()
-    is_comment = stripped.startswith("//") or stripped.startswith("*") or stripped.startswith("/*")
+    is_comment = (
+        stripped.startswith("//")
+        or stripped.startswith("*")
+        or stripped.startswith("/*")
+    )
 
     strings = [m.group(1) for m in STRING_RE.finditer(line)]
     brand_in_string = any(BRAND_RE.search(s) for s in strings)
 
     # preserved env/config keys
-    if any(k in line for k in PRESERVED_KEYS) and not brand_in_string_excluding_keys(strings):
+    if any(k in line for k in PRESERVED_KEYS) and not brand_in_string_excluding_keys(
+        strings
+    ):
         # the brand match is only within a preserved key
         if not _brand_outside_preserved(line):
             return []
@@ -84,52 +110,163 @@ def classify_line(path: Path, lineno: int, line: str) -> list[Occurrence]:
 
     # comment → SKIP (attribution comments retained) — check BEFORE URL classification
     if is_comment:
-        out.append(Occurrence(rel, lineno, "SKIP", "comment (attribution retained)", brand_in_string, stripped[:200]))
+        out.append(
+            Occurrence(
+                rel,
+                lineno,
+                "SKIP",
+                "comment (attribution retained)",
+                brand_in_string,
+                stripped[:200],
+            )
+        )
         return out
 
     # internal routing host-checks (upstream-compat logic like uses_codex_backend) → SKIP
-    if re.search(r'starts_with\(\s*"https://chatgpt\.com', line) or re.search(r'==\s*"chatgpt\.com"', line) \
-            or "ends_with(\".chatgpt.com\")" in line or 'chatgpt_hosts' in rel \
-            or re.search(r'host\s*==\s*"chatgpt\.com"', line):
-        out.append(Occurrence(rel, lineno, "SKIP", "internal host-routing check (upstream-compat logic)", brand_in_string, stripped[:200]))
+    if (
+        re.search(r'starts_with\(\s*"https://chatgpt\.com', line)
+        or re.search(r'==\s*"chatgpt\.com"', line)
+        or 'ends_with(".chatgpt.com")' in line
+        or "chatgpt_hosts" in rel
+        or re.search(r'host\s*==\s*"chatgpt\.com"', line)
+    ):
+        out.append(
+            Occurrence(
+                rel,
+                lineno,
+                "SKIP",
+                "internal host-routing check (upstream-compat logic)",
+                brand_in_string,
+                stripped[:200],
+            )
+        )
         return out
 
     # URL buckets
     if "chatgpt.com" in line or "openai/codex" in line or "@openai/codex" in line:
         # issuer / protocol constants are SKIP
         if any(h in line for h in ISSUER_HINTS):
-            out.append(Occurrence(rel, lineno, "SKIP", "issuer/protocol-or-backend-api constant", brand_in_string, stripped[:200]))
+            out.append(
+                Occurrence(
+                    rel,
+                    lineno,
+                    "SKIP",
+                    "issuer/protocol-or-backend-api constant",
+                    brand_in_string,
+                    stripped[:200],
+                )
+            )
             return out
-        if "chatgpt.com/backend-api" in line or "chatgpt.com/device" in line or "chatgpt.com/#settings" in line:
-            out.append(Occurrence(rel, lineno, "C", "functional endpoint (chatgpt.com path)", brand_in_string, stripped[:200]))
+        if (
+            "chatgpt.com/backend-api" in line
+            or "chatgpt.com/device" in line
+            or "chatgpt.com/#settings" in line
+        ):
+            out.append(
+                Occurrence(
+                    rel,
+                    lineno,
+                    "C",
+                    "functional endpoint (chatgpt.com path)",
+                    brand_in_string,
+                    stripped[:200],
+                )
+            )
             return out
         if "github.com/openai/codex" in line or "@openai/codex" in line:
-            out.append(Occurrence(rel, lineno, "B", "upstream repo / npm attribution URL", brand_in_string, stripped[:200]))
+            out.append(
+                Occurrence(
+                    rel,
+                    lineno,
+                    "B",
+                    "upstream repo / npm attribution URL",
+                    brand_in_string,
+                    stripped[:200],
+                )
+            )
             return out
-        out.append(Occurrence(rel, lineno, "C", "chatgpt.com reference (verify reachability)", brand_in_string, stripped[:200]))
+        out.append(
+            Occurrence(
+                rel,
+                lineno,
+                "C",
+                "chatgpt.com reference (verify reachability)",
+                brand_in_string,
+                stripped[:200],
+            )
+        )
         return out
 
     # brand only inside a string literal → classify cosmetic vs protocol-value
     if brand_in_string:
         # HTTP header names / wire values — MUST NOT CHANGE (protocol)
-        if re.search(r'"[^"]*OpenAI-[A-Za-z]', line) or re.search(r'"X-OpenAI-', line) \
-                or "OpenAI-Beta" in line or "OpenAI-Organization" in line or "OpenAI-Project" in line:
-            out.append(Occurrence(rel, lineno, "SKIP", "HTTP header / wire value (protocol, must not change)", True, stripped[:200]))
+        if (
+            re.search(r'"[^"]*OpenAI-[A-Za-z]', line)
+            or re.search(r'"X-OpenAI-', line)
+            or "OpenAI-Beta" in line
+            or "OpenAI-Organization" in line
+            or "OpenAI-Project" in line
+        ):
+            out.append(
+                Occurrence(
+                    rel,
+                    lineno,
+                    "SKIP",
+                    "HTTP header / wire value (protocol, must not change)",
+                    True,
+                    stripped[:200],
+                )
+            )
             return out
         # filesystem path components for upstream config dirs — MUST NOT CHANGE (config loading)
         if re.search(r'(join|Path::new)\(\s*"(OpenAI|Codex)"', line):
-            out.append(Occurrence(rel, lineno, "SKIP", "upstream FS path component (config loading, verify before touch)", True, stripped[:200]))
+            out.append(
+                Occurrence(
+                    rel,
+                    lineno,
+                    "SKIP",
+                    "upstream FS path component (config loading, verify before touch)",
+                    True,
+                    stripped[:200],
+                )
+            )
             return out
         # provider id / display-name constants — MUST NOT CHANGE (provider routing)
-        if re.search(r'(PROVIDER_NAME|provider_id|"openai")', line) and "OpenAI" in line:
-            out.append(Occurrence(rel, lineno, "SKIP", "provider id/name (routing, must not change)", True, stripped[:200]))
+        if (
+            re.search(r'(PROVIDER_NAME|provider_id|"openai")', line)
+            and "OpenAI" in line
+        ):
+            out.append(
+                Occurrence(
+                    rel,
+                    lineno,
+                    "SKIP",
+                    "provider id/name (routing, must not change)",
+                    True,
+                    stripped[:200],
+                )
+            )
             return out
-        out.append(Occurrence(rel, lineno, "A", "user-visible string literal", True, stripped[:200]))
+        out.append(
+            Occurrence(
+                rel, lineno, "A", "user-visible string literal", True, stripped[:200]
+            )
+        )
         return out
 
     # brand present but only as an identifier/symbol → SKIP (internal symbol)
-    out.append(Occurrence(rel, lineno, "SKIP", "identifier/symbol (not user-visible)", False, stripped[:200]))
+    out.append(
+        Occurrence(
+            rel,
+            lineno,
+            "SKIP",
+            "identifier/symbol (not user-visible)",
+            False,
+            stripped[:200],
+        )
+    )
     return out
+
 
 def brand_in_string_excluding_keys(strings: list[str]) -> bool:
     for s in strings:
@@ -137,12 +274,14 @@ def brand_in_string_excluding_keys(strings: list[str]) -> bool:
             return True
     return False
 
+
 def _brand_outside_preserved(line: str) -> bool:
     # Replace preserved keys, then see if brand still matches
     tmp = line
     for k in PRESERVED_KEYS:
         tmp = tmp.replace(k, "")
     return bool(BRAND_RE.search(tmp))
+
 
 def test_line_ranges(text: str) -> set[int]:
     """Return 1-based line numbers that fall inside a `#[cfg(test)]` block.
@@ -196,7 +335,16 @@ def main() -> int:
                 for i, line in enumerate(text.splitlines(), start=1):
                     if BRAND_RE.search(line):
                         if i in test_lines:
-                            occs.append(Occurrence(str(path.relative_to(ROOT)), i, "SKIP", "inline test code", False, line.strip()[:200]))
+                            occs.append(
+                                Occurrence(
+                                    str(path.relative_to(ROOT)),
+                                    i,
+                                    "SKIP",
+                                    "inline test code",
+                                    False,
+                                    line.strip()[:200],
+                                )
+                            )
                             continue
                         occs.extend(classify_line(path, i, line))
 
@@ -224,6 +372,7 @@ def main() -> int:
         for f in sorted(byfile):
             print(f"  {f}  ({len(byfile[f])})")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

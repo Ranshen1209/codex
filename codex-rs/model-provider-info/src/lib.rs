@@ -375,7 +375,7 @@ impl ModelProviderInfo {
             base_url: Some(base_url),
             env_key: Some("SAKRYLLE_API_KEY".to_string()),
             env_key_instructions: Some(
-                "Create an API key at https://sub.sakrylle.com and set SAKRYLLE_API_KEY"
+                "Create an API key at https://ai1.sakrylle.com and set SAKRYLLE_API_KEY"
                     .to_string(),
             ),
             experimental_bearer_token: None,

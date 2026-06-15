@@ -165,6 +165,23 @@ JSON-RPC over WebSocket/stdio/Unix socket. Resource/method naming: `<resource>/<
 - **Config isolation:** `codex-rs/config/` handles profile-based config isolation (`CODEX_HOME/<name>.config.toml`).
 - **Features:** `Sakrylle` provider, `codex_apps` MCP client disabled, `image_generation` tools disabled for Sakrylle provider.
 
+## Rust conventions
+
+Detailed Rust/TUI/test conventions are below. Key highlights:
+
+- Run `just fmt` after code changes without asking for approval.
+- Prefer `just test -p <crate>` scoped to changed crates; ask before `just test` (full suite).
+- Run `just fix -p <crate>` after changes (scoped unless touching shared crates).
+- **Avoid adding code to `codex-core`.** Prefer new crates or existing specialized crates.
+- Modules should stay under 500 LoC (excluding tests), files under ~800 LoC.
+- Use `#[path = "..._tests.rs"]` for new test modules rather than inline `mod tests`.
+- Snapshot tests (`insta`) required for UI changes in `codex-tui`.
+- Integration tests (in `core/suite`) preferred over unit tests for agent logic changes.
+- Never use `#[serde(skip_serializing_if = "Option::is_none")]` on v2 API types.
+- Use Stylize trait helpers (`"text".dim()`, `.red()`, `.cyan()`) not manual `Style` construction.
+- Run `just write-config-schema` after config type changes; `just write-app-server-schema` after protocol changes.
+- After dependency changes: `just bazel-lock-update` + commit the lockfile.
+
 ## Sakrylle OIDC Documentation Governance
 
 - `oidc-docs/` in this repository is **product-local** documentation for Sakrylle CLI only.
