@@ -1,0 +1,142 @@
+name: sakrylle-release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "sakrylle-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag to publish. Defaults to the current ref name."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sakrylle-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+          - runner: macos-15
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: codex-rs
+          key: release-${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build -p codex-cli --bin sakrylle --release --target ${{ matrix.target }}
+
+      - name: Package Unix artifact
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact="sakrylle-${{ matrix.target }}"
+          stage="target/release-package/${artifact}"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.target }}/release/sakrylle" "$stage/sakrylle"
+          chmod 0755 "$stage/sakrylle"
+          tar -C "target/release-package" -czf "target/release-package/${artifact}.tar.gz" "$artifact"
+          shasum -a 256 "target/release-package/${artifact}.tar.gz" > "target/release-package/${artifact}.tar.gz.sha256"
+
+      - name: Package Windows artifact
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $artifact = "sakrylle-${{ matrix.target }}"
+          $stage = "target/release-package/$artifact"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/sakrylle.exe" "$stage/sakrylle.exe"
+          Compress-Archive -Path $stage -DestinationPath "target/release-package/$artifact.zip" -Force
+          Get-FileHash "target/release-package/$artifact.zip" -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLowerInvariant())  $artifact.zip" } |
+            Set-Content "target/release-package/$artifact.zip.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sakrylle-${{ matrix.target }}
+          path: |
+            codex-rs/target/release-package/sakrylle-${{ matrix.target }}.tar.gz
+            codex-rs/target/release-package/sakrylle-${{ matrix.target }}.tar.gz.sha256
+            codex-rs/target/release-package/sakrylle-${{ matrix.target }}.zip
+            codex-rs/target/release-package/sakrylle-${{ matrix.target }}.zip.sha256
+          if-no-files-found: ignore
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Build SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum sakrylle-*.* | grep -v '\.sha256$' > SHA256SUMS
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        env:
+          INPUT_TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          tag_name="${INPUT_TAG_NAME:-${GITHUB_REF_NAME}}"
+          if [[ -z "$tag_name" ]]; then
+            echo "tag_name input is required when this workflow is not running on a tag" >&2
+            exit 1
+          fi
+          echo "tag_name=$tag_name" >> "$GITHUB_OUTPUT"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag_name }}
+          name: ${{ steps.release_tag.outputs.tag_name }}
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ contains(steps.release_tag.outputs.tag_name, '-') }}
