@@ -72,6 +72,13 @@ pub(crate) fn build_model_selection_edits(
     ]
 }
 
+pub(crate) fn build_sakrylle_group_selection_edits(id: u64, name: &str) -> Vec<ConfigEdit> {
+    vec![
+        replace_config_value("sakrylle_default_group_id", serde_json::json!(id)),
+        replace_config_value("sakrylle_default_group_name", serde_json::json!(name)),
+    ]
+}
+
 pub(crate) fn build_service_tier_selection_edits(service_tier: Option<&str>) -> Vec<ConfigEdit> {
     let service_tier_edit = service_tier.map_or_else(
         || clear_config_value("service_tier"),

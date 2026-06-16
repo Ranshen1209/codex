@@ -771,7 +771,10 @@ impl ModelClient {
         let prompt_cache_key = Some(self.prompt_cache_key());
         let service_tier = model_info.service_tier_for_request(service_tier);
         let request = ResponsesApiRequest {
-            model: model_info.slug.clone(),
+            model: model_info
+                .routing_model
+                .clone()
+                .unwrap_or_else(|| model_info.slug.clone()),
             instructions: instructions.clone(),
             input,
             tools,

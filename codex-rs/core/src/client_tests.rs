@@ -10,6 +10,7 @@ use super::X_OPENAI_SUBAGENT_HEADER;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
+use crate::client_common::Prompt;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
@@ -338,6 +339,32 @@ async fn summarize_memories_returns_empty_for_empty_input() {
         .await
         .expect("empty summarize request should succeed");
     assert_eq!(output.len(), 0);
+}
+
+#[test]
+fn responses_request_uses_routing_model_when_present() {
+    let client = test_model_client(SessionSource::Cli);
+    let provider = client
+        .state
+        .provider
+        .info()
+        .to_api_provider(/*auth_mode*/ None)
+        .expect("provider should convert");
+    let mut model_info = test_model_info();
+    model_info.routing_model = Some("3:gpt-5.5".to_string());
+
+    let request = client
+        .build_responses_request(
+            &provider,
+            &Prompt::default(),
+            &model_info,
+            /*effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::Auto,
+            /*service_tier*/ None,
+        )
+        .expect("request should build");
+
+    assert_eq!(request.model, "3:gpt-5.5");
 }
 
 #[tokio::test]

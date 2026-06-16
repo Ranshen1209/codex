@@ -1,0 +1,12 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 1496
+expression: rendered
+---
+╭───────────────────────────────────────╮
+│ >_ Sakrylle CLI (vtest)               │
+│                                       │
+│ model:       gpt-5   /model to change │
+│ directory:   /tmp/project             │
+│ permissions: YOLO mode                │
+╰───────────────────────────────────────╯

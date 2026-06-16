@@ -11502,6 +11502,16 @@
           "displayName": {
             "type": "string"
           },
+          "group": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModelGroup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "hidden": {
             "type": "boolean"
           },
@@ -11578,6 +11588,27 @@
         },
         "required": [
           "message"
+        ],
+        "type": "object"
+      },
+      "ModelGroup": {
+        "properties": {
+          "id": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "rate_multiplier": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "rate_multiplier"
         ],
         "type": "object"
       },

@@ -13,6 +13,8 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
         id: id.to_string(),
         model: format!("{id}-model"),
         display_name: format!("{id} display"),
+        group: None,
+        routing_model: None,
         description: format!("{id} description"),
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: vec![ReasoningEffortPreset {

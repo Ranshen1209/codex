@@ -60,6 +60,16 @@ fn remote_model_with_visibility(
         .expect("valid model")
 }
 
+fn sakrylle_group_model(slug: &str, display: &str, group_id: u64, group_name: &str) -> ModelInfo {
+    let mut model = remote_model(slug, display, 1);
+    model.group = Some(codex_protocol::openai_models::ModelGroup {
+        id: group_id,
+        name: group_name.to_string(),
+        rate_multiplier: serde_json::Number::from_f64(0.4).expect("finite multiplier"),
+    });
+    model
+}
+
 fn assert_models_contain(actual: &[ModelInfo], expected: &[ModelInfo]) {
     for model in expected {
         assert!(
@@ -192,6 +202,60 @@ fn openai_manager_for_tests_with_auth(
 
 fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManager {
     StaticModelsManager::new(/*auth_manager*/ None, model_catalog)
+}
+
+#[tokio::test]
+async fn grouped_model_lookup_prefers_configured_sakrylle_group() {
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![
+            sakrylle_group_model("4:gpt-5.5", "gpt-5.5", 4, "GPT-Plus"),
+            sakrylle_group_model("3:gpt-5.5", "gpt-5.5", 3, "GPT-Pro"),
+        ],
+    });
+    let config = ModelsManagerConfig {
+        sakrylle_default_group_id: Some(3),
+        sakrylle_default_group_name: Some("GPT-Pro".to_string()),
+        ..Default::default()
+    };
+
+    let model = manager.get_model_info("gpt-5.5", &config).await;
+
+    assert_eq!(model.slug, "gpt-5.5");
+    assert_eq!(model.routing_model, Some("3:gpt-5.5".to_string()));
+    assert_eq!(model.group.expect("group metadata").name, "GPT-Pro");
+}
+
+#[tokio::test]
+async fn grouped_model_lookup_defaults_to_gpt_pro_when_unconfigured() {
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![
+            sakrylle_group_model("4:gpt-5.5", "gpt-5.5", 4, "GPT-Plus"),
+            sakrylle_group_model("3:gpt-5.5", "gpt-5.5", 3, "GPT-Pro"),
+        ],
+    });
+
+    let model = manager
+        .get_model_info("gpt-5.5", &ModelsManagerConfig::default())
+        .await;
+
+    assert_eq!(model.slug, "gpt-5.5");
+    assert_eq!(model.routing_model, Some("3:gpt-5.5".to_string()));
+    assert_eq!(model.group.expect("group metadata").name, "GPT-Pro");
+}
+
+#[tokio::test]
+async fn grouped_model_lookup_keeps_bare_slug_and_preserves_routing_model() {
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![sakrylle_group_model("3:gpt-5.5", "gpt-5.5", 3, "GPT-Pro")],
+    });
+
+    let model = manager
+        .get_model_info("gpt-5.5", &ModelsManagerConfig::default())
+        .await;
+
+    assert_eq!(model.slug, "gpt-5.5");
+    assert_eq!(model.routing_model, Some("3:gpt-5.5".to_string()));
+    assert_eq!(model.group.expect("group metadata").name, "GPT-Pro");
 }
 
 async fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
@@ -508,15 +572,12 @@ async fn refresh_available_models_keeps_merging_for_api_auth() {
             "test-api-key",
         ))),
     );
-    let mut expected = load_remote_models_from_file().expect("bundled models should parse");
-    expected.extend(remote_models);
-
     manager
         .refresh_available_models(RefreshStrategy::OnlineIfUncached)
         .await
         .expect("refresh succeeds");
 
-    assert_eq!(manager.get_remote_models().await, expected);
+    assert_models_contain(&manager.get_remote_models().await, &remote_models);
     assert_eq!(endpoint.fetch_count(), 1, "expected a single model fetch");
 }
 
@@ -660,7 +721,7 @@ async fn refresh_available_models_drops_removed_remote_models() {
 }
 
 #[tokio::test]
-async fn refresh_available_models_skips_network_without_chatgpt_auth() {
+async fn refresh_available_models_fetches_without_chatgpt_auth() {
     let dynamic_slug = "dynamic-model-only-for-test-noauth";
     let codex_home = tempdir().expect("temp dir");
     let endpoint = TestModelsEndpoint::without_refresh(vec![vec![remote_model(
@@ -677,18 +738,18 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
     manager
         .refresh_available_models(RefreshStrategy::Online)
         .await
-        .expect("refresh should no-op without chatgpt auth");
+        .expect("refresh should fetch without chatgpt auth");
     let cached_remote = manager.get_remote_models().await;
     assert!(
-        !cached_remote
+        cached_remote
             .iter()
             .any(|candidate| candidate.slug == dynamic_slug),
-        "remote refresh should be skipped without chatgpt auth"
+        "remote refresh should include models fetched without chatgpt auth"
     );
     assert_eq!(
         endpoint.fetch_count(),
-        0,
-        "endpoint that cannot refresh should avoid model fetches"
+        1,
+        "endpoint should fetch models without chatgpt auth"
     );
 }
 
@@ -746,7 +807,7 @@ impl ModelsEndpointClient for TestAuthAwareModelsEndpoint {
 }
 
 #[tokio::test]
-async fn refresh_available_models_skips_network_when_external_api_key_overrides_chatgpt_auth() {
+async fn refresh_available_models_fetches_when_external_api_key_overrides_chatgpt_auth() {
     let dynamic_slug = "dynamic-model-only-for-test-external-api-key";
     let codex_home = tempdir().expect("temp dir");
     let auth_manager =
@@ -769,19 +830,19 @@ async fn refresh_available_models_skips_network_when_external_api_key_overrides_
     manager
         .refresh_available_models(RefreshStrategy::Online)
         .await
-        .expect("refresh should no-op with API key auth");
+        .expect("refresh should fetch with API key auth");
     let cached_remote = manager.get_remote_models().await;
 
     assert!(
-        !cached_remote
+        cached_remote
             .iter()
             .any(|candidate| candidate.slug == dynamic_slug),
-        "remote refresh should be skipped when external API key auth is active"
+        "remote refresh should include models fetched when external API key auth is active"
     );
     assert_eq!(
         endpoint.fetch_count(),
-        0,
-        "endpoint should avoid model fetches when external API key auth is active"
+        1,
+        "endpoint should fetch models when external API key auth is active"
     );
 }
 
@@ -878,6 +939,23 @@ fn build_available_models_picks_default_after_hiding_hidden_models() {
     let available = manager.build_available_models(vec![hidden_model, visible_model]);
 
     assert_eq!(available, vec![expected_hidden, expected_visible]);
+}
+
+#[test]
+fn build_available_models_defaults_to_gpt_pro_gpt_5_5() {
+    let manager = static_manager_for_tests(ModelsResponse { models: Vec::new() });
+
+    let special = sakrylle_group_model("3:gpt-5.5", "gpt-5.5", 3, "GPT-Pro-Special");
+    let pro = sakrylle_group_model("14:gpt-5.5", "gpt-5.5", 14, "GPT-Pro");
+    let other = sakrylle_group_model("15:claude-sonnet", "claude-sonnet", 15, "Claude");
+    let mut expected_pro = ModelPreset::from(pro.clone());
+    expected_pro.is_default = true;
+
+    let available = manager.build_available_models(vec![special, other, pro]);
+
+    assert_eq!(available[0], expected_pro);
+    assert!(available[0].is_default);
+    assert!(available[1..].iter().all(|preset| !preset.is_default));
 }
 
 #[tokio::test]

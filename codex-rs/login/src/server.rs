@@ -109,6 +109,13 @@ static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
         .unwrap_or_else(|err| panic!("login error page template must parse: {err}"))
 });
 
+/// SAKRYLLE: OIDC login — cherry blossom logo for the local success page.
+static LOGIN_SUCCESS_LOGO_DATA_URI: LazyLock<String> = LazyLock::new(|| {
+    let encoded = base64::engine::general_purpose::STANDARD
+        .encode(include_bytes!("assets/cherry-blossom_15273565.png"));
+    format!("data:image/png;base64,{encoded}")
+});
+
 /// Options for launching the local login callback server.
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -268,9 +275,9 @@ pub async fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         let server = server;
         let discovery = discovery.clone();
         let opts = opts.clone();
-        let redirect_uri = redirect_uri.clone();
-        let pkce = pkce.clone();
-        let nonce = nonce.clone();
+        let redirect_uri = redirect_uri;
+        let pkce = pkce;
+        let nonce = nonce;
         tokio::spawn(async move {
             // SAKRYLLE: OIDC login — 300-second login timeout
             let timeout = tokio::time::sleep(Duration::from_secs(LOGIN_TIMEOUT_SECS));
@@ -523,7 +530,8 @@ async fn process_request(
         }
         "/success" => {
             // SAKRYLLE: OIDC login — Sakrylle-branded success page
-            let body = include_str!("assets/sakrylle_success.html");
+            let body = include_str!("assets/sakrylle_success.html")
+                .replace("{{PRODUCT_ICON_DATA_URI}}", &LOGIN_SUCCESS_LOGO_DATA_URI);
             HandledRequest::ResponseAndExit {
                 headers: match Header::from_bytes(
                     &b"Content-Type"[..],
@@ -532,7 +540,7 @@ async fn process_request(
                     Ok(header) => vec![header],
                     Err(_) => Vec::new(),
                 },
-                body: body.as_bytes().to_vec(),
+                body: body.into_bytes(),
                 result: Ok(()),
             }
         }
@@ -708,7 +716,7 @@ fn bind_server(port: u16) -> io::Result<Server> {
 
     // SAKRYLLE: OIDC login — for random port (0), just bind once; no retry/fallback needed
     match Server::http(&bind_address) {
-        Ok(server) => return Ok(server),
+        Ok(server) => Ok(server),
         Err(err) => {
             // If port was 0 (random), the OS should always find a free port — failure is fatal.
             if port == 0 {

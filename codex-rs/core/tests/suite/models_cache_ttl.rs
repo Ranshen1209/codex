@@ -330,6 +330,8 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
         display_name: "Remote Test".to_string(),
+        group: None,
+        routing_model: None,
         description: Some("remote model".to_string()),
         default_reasoning_level: Some(ReasoningEffort::Medium),
         supported_reasoning_levels: vec![

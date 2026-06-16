@@ -141,6 +141,13 @@ of strings; comma-separated strings are not supported. Use \
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
+
+    /// Sakrylle Responses API group id to use when routing bare model names.
+    pub sakrylle_default_group_id: Option<u64>,
+
+    /// User-facing Sakrylle Responses API group name stored alongside the id.
+    pub sakrylle_default_group_name: Option<String>,
+
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
 

@@ -126,6 +126,13 @@ pub struct ModelServiceTier {
     pub description: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct ModelGroup {
+    pub id: u64,
+    pub name: String,
+    pub rate_multiplier: serde_json::Number,
+}
+
 /// Metadata describing a Codex-supported model.
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ModelPreset {
@@ -133,6 +140,12 @@ pub struct ModelPreset {
     pub id: String,
     /// Model slug (e.g., "gpt-5").
     pub model: String,
+    /// Model identifier to send to the API. This can include provider routing
+    /// prefixes while `model` remains the user-facing model slug.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<ModelGroup>,
     /// Display name shown in UIs.
     pub display_name: String,
     /// Short human description shown in UIs.
@@ -283,6 +296,10 @@ const fn default_effective_context_window_percent() -> i64 {
 pub struct ModelInfo {
     pub slug: String,
     pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<ModelGroup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_model: Option<String>,
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_reasoning_level: Option<ReasoningEffort>,
@@ -478,9 +495,19 @@ pub struct ModelsResponse {
 impl From<ModelInfo> for ModelPreset {
     fn from(info: ModelInfo) -> Self {
         let supports_personality = info.supports_personality();
+        let group = info.group.clone();
+        let routing_model = info
+            .routing_model
+            .clone()
+            .or_else(|| group.as_ref().map(|_| info.slug.clone()));
+        let model = group
+            .as_ref()
+            .map_or_else(|| info.slug.clone(), |_| info.display_name.clone());
         ModelPreset {
             id: info.slug.clone(),
-            model: info.slug.clone(),
+            model,
+            routing_model,
+            group,
             display_name: info.display_name,
             description: info.description.unwrap_or_default(),
             default_reasoning_effort: info
@@ -610,6 +637,8 @@ mod tests {
         ModelInfo {
             slug: "test-model".to_string(),
             display_name: "Test Model".to_string(),
+            group: None,
+            routing_model: None,
             description: None,
             default_reasoning_level: None,
             supported_reasoning_levels: vec![],
@@ -862,6 +891,63 @@ mod tests {
         assert!(!model.supports_search_tool);
         assert_eq!(model.auto_review_model_override, None);
         assert_eq!(model.tool_mode, None);
+        assert_eq!(model.group, None);
+        assert_eq!(model.routing_model, None);
+    }
+
+    #[test]
+    fn model_info_deserializes_sakrylle_group_metadata() {
+        let mut value =
+            serde_json::to_value(test_model(/*spec*/ None)).expect("serialize test model");
+        let object = value
+            .as_object_mut()
+            .expect("model info should be an object");
+        object.insert(
+            "slug".to_string(),
+            serde_json::Value::String("3:gpt-5.5".to_string()),
+        );
+        object.insert(
+            "display_name".to_string(),
+            serde_json::Value::String("gpt-5.5".to_string()),
+        );
+        object.insert(
+            "group".to_string(),
+            serde_json::json!({
+                "id": 3,
+                "name": "GPT-Pro",
+                "rate_multiplier": 0.4
+            }),
+        );
+
+        let model = serde_json::from_value::<ModelInfo>(value).expect("deserialize model info");
+
+        assert_eq!(
+            model.group,
+            Some(ModelGroup {
+                id: 3,
+                name: "GPT-Pro".to_string(),
+                rate_multiplier: serde_json::Number::from_f64(0.4).expect("finite multiplier"),
+            })
+        );
+    }
+
+    #[test]
+    fn model_preset_uses_display_name_for_sakrylle_grouped_models() {
+        let preset = ModelPreset::from(ModelInfo {
+            slug: "3:gpt-5.5".to_string(),
+            display_name: "gpt-5.5".to_string(),
+            group: Some(ModelGroup {
+                id: 3,
+                name: "GPT-Pro".to_string(),
+                rate_multiplier: serde_json::Number::from_f64(0.4).expect("finite multiplier"),
+            }),
+            routing_model: None,
+            ..test_model(/*spec*/ None)
+        });
+
+        assert_eq!(preset.model, "gpt-5.5");
+        assert_eq!(preset.routing_model, Some("3:gpt-5.5".to_string()));
+        assert_eq!(preset.id, "3:gpt-5.5");
     }
 
     #[test]

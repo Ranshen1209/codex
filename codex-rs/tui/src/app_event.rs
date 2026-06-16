@@ -639,6 +639,13 @@ pub(crate) enum AppEvent {
         effort: Option<ReasoningEffort>,
     },
 
+    /// Persist the selected Sakrylle API group to the appropriate config.
+    PersistSakrylleGroupSelection {
+        id: u64,
+        name: String,
+        open_model_picker: bool,
+    },
+
     /// Persist the selected personality to the appropriate config.
     PersistPersonalitySelection {
         personality: Personality,
@@ -686,11 +693,6 @@ pub(crate) enum AppEvent {
     OpenPlanReasoningScopePrompt {
         model: String,
         effort: Option<ReasoningEffort>,
-    },
-
-    /// Open the full model picker (non-auto models).
-    OpenAllModelsPopup {
-        models: Vec<ModelPreset>,
     },
 
     /// Open the confirmation prompt before enabling full access mode.

@@ -253,6 +253,7 @@ impl ChatWidget {
 
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
+        self.config.model = Some(model.to_string());
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             Some(model.to_string()),
             /*effort*/ None,
@@ -264,6 +265,12 @@ impl ChatWidget {
             mask.model = Some(model.to_string());
         }
         self.refresh_effective_service_tier();
+        self.refresh_model_dependent_surfaces();
+    }
+
+    pub(crate) fn set_sakrylle_default_group(&mut self, id: u64, name: String) {
+        self.config.sakrylle_default_group_id = Some(id);
+        self.config.sakrylle_default_group_name = Some(name);
         self.refresh_model_dependent_surfaces();
     }
 

@@ -59,7 +59,7 @@ impl Audience {
     }
 
     fn contains(&self, expected: &str) -> bool {
-        self.values().iter().any(|value| *value == expected)
+        self.values().contains(&expected)
     }
 
     fn len(&self) -> usize {

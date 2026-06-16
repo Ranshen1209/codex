@@ -16,6 +16,7 @@ use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::build_reqwest_client;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::SAKRYLLE_DEFAULT_BASE_URL;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::error::CodexErr;
@@ -98,10 +99,15 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
         });
         let client = ModelsClient::new(transport, api_provider, api_auth)
             .with_telemetry(Some(request_telemetry));
+        let include_all_groups = self
+            .provider_info
+            .base_url
+            .as_deref()
+            .is_some_and(|base_url| base_url.trim_end_matches('/') == SAKRYLLE_DEFAULT_BASE_URL);
 
         timeout(
             MODELS_REFRESH_TIMEOUT,
-            client.list_models(client_version, HeaderMap::new()),
+            client.list_models(client_version, HeaderMap::new(), include_all_groups),
         )
         .await
         .map_err(|_| CodexErr::Timeout)?

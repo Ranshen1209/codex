@@ -13,6 +13,7 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    Group,
     Ide,
     Permissions,
     Keymap,
@@ -107,6 +108,7 @@ impl SlashCommand {
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Group => "choose the Sakrylle Responses API group",
             SlashCommand::Ide => {
                 "include current selection, open files, and other context from your IDE"
             }
@@ -188,6 +190,7 @@ impl SlashCommand {
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Model
+            | SlashCommand::Group
             | SlashCommand::Personality
             | SlashCommand::Permissions
             | SlashCommand::Keymap

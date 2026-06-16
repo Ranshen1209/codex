@@ -1518,6 +1518,7 @@ async fn set_model_updates_active_collaboration_mask() {
     chat.set_model("gpt-5.4-mini");
 
     assert_eq!(chat.current_model(), "gpt-5.4-mini");
+    assert_eq!(chat.config.model.as_deref(), Some("gpt-5.4-mini"));
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
 }
 

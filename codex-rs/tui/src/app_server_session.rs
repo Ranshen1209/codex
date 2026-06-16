@@ -1180,6 +1180,7 @@ pub(crate) fn status_account_display_from_auth_mode(
 }
 
 fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
+    let routing_model = model.group.as_ref().map(|_| model.id.clone());
     let upgrade = model.upgrade.map(|upgrade_id| {
         let upgrade_info = model.upgrade_info.clone();
         ModelUpgrade {
@@ -1200,6 +1201,8 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
         id: model.id,
         model: model.model,
         display_name: model.display_name,
+        routing_model,
+        group: model.group,
         description: model.description,
         default_reasoning_effort: model.default_reasoning_effort,
         supported_reasoning_efforts: model

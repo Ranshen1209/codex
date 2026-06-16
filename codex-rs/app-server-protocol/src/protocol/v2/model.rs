@@ -1,6 +1,7 @@
 use super::shared::v2_enum_from_core;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailabilityNux;
+use codex_protocol::openai_models::ModelGroup;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
@@ -81,6 +82,7 @@ pub struct ModelServiceTier {
 pub struct Model {
     pub id: String,
     pub model: String,
+    pub group: Option<ModelGroup>,
     pub upgrade: Option<String>,
     pub upgrade_info: Option<ModelUpgradeInfo>,
     pub availability_nux: Option<ModelAvailabilityNux>,

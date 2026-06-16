@@ -5,6 +5,16 @@
 
 use super::*;
 
+pub(crate) const MODEL_SELECTION_VIEW_ID: &str = "model-selection";
+pub(crate) const REASONING_SELECTION_VIEW_ID: &str = "reasoning-selection";
+
+#[derive(Clone)]
+struct SakrylleGroupChoice {
+    id: u64,
+    name: String,
+    rate_multiplier: String,
+}
+
 impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
@@ -27,7 +37,152 @@ impl ChatWidget {
                 return;
             }
         };
-        self.open_model_popup_with_presets(presets);
+        let presets = self.filter_presets_for_current_sakrylle_group(presets);
+        self.open_all_models_popup(presets);
+    }
+
+    pub(crate) fn dismiss_model_selection_views(&mut self) {
+        self.bottom_pane
+            .dismiss_active_view_if_id(REASONING_SELECTION_VIEW_ID);
+        self.bottom_pane
+            .dismiss_active_view_if_id(MODEL_SELECTION_VIEW_ID);
+    }
+
+    pub(crate) fn open_group_popup(&mut self) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Group selection is disabled until startup completes.".to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
+
+        let presets: Vec<ModelPreset> = match self.model_catalog.try_list_models() {
+            Ok(models) => models,
+            Err(_) => {
+                self.add_info_message(
+                    "Models are being updated; please try /group again in a moment.".to_string(),
+                    /*hint*/ None,
+                );
+                return;
+            }
+        };
+        let groups = Self::sakrylle_group_choices(&presets);
+        if groups.is_empty() {
+            self.add_info_message(
+                "No Sakrylle model groups are available right now.".to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
+
+        let current_group_id = self.current_sakrylle_group_id(&presets);
+        let current_model = self.current_model().to_string();
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for group in groups {
+            let group_id = group.id;
+            let group_name = group.name.clone();
+            let model_available = presets.iter().any(|preset| {
+                preset.model == current_model
+                    && preset
+                        .group
+                        .as_ref()
+                        .is_some_and(|candidate_group| candidate_group.id == group_id)
+            });
+            let description = if model_available {
+                Some(format!("{}x rate multiplier", group.rate_multiplier))
+            } else {
+                Some(format!(
+                    "{}x rate multiplier; switch model after selecting",
+                    group.rate_multiplier
+                ))
+            };
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::PersistSakrylleGroupSelection {
+                    id: group_id,
+                    name: group_name.clone(),
+                    open_model_picker: true,
+                });
+            })];
+            items.push(SelectionItem {
+                name: group.name,
+                description,
+                is_current: current_group_id == Some(group_id),
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        let header = self.model_menu_header(
+            "Select Group",
+            "Pick the Sakrylle API group used when resolving grouped models.",
+        );
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header,
+            ..Default::default()
+        });
+    }
+
+    fn filter_presets_for_current_sakrylle_group(
+        &self,
+        presets: Vec<ModelPreset>,
+    ) -> Vec<ModelPreset> {
+        let Some(group_id) = self.current_sakrylle_group_id(&presets) else {
+            return presets;
+        };
+        presets
+            .into_iter()
+            .filter(|preset| {
+                preset
+                    .group
+                    .as_ref()
+                    .is_some_and(|group| group.id == group_id)
+            })
+            .collect()
+    }
+
+    fn current_sakrylle_group_id(&self, presets: &[ModelPreset]) -> Option<u64> {
+        if let Some(group_id) = self.config.sakrylle_default_group_id {
+            return Some(group_id);
+        }
+        if let Some(group_name) = self.config.sakrylle_default_group_name.as_deref()
+            && let Some(group_id) = presets.iter().find_map(|preset| {
+                preset
+                    .group
+                    .as_ref()
+                    .and_then(|group| (group.name == group_name).then_some(group.id))
+            })
+        {
+            return Some(group_id);
+        }
+        presets.iter().find_map(|preset| {
+            preset
+                .group
+                .as_ref()
+                .and_then(|group| (group.name == "GPT-Pro").then_some(group.id))
+        })
+    }
+
+    fn sakrylle_group_choices(presets: &[ModelPreset]) -> Vec<SakrylleGroupChoice> {
+        let mut groups: Vec<SakrylleGroupChoice> = Vec::new();
+        for preset in presets {
+            let Some(group) = preset.group.as_ref() else {
+                continue;
+            };
+            if groups.iter().any(|existing| existing.id == group.id) {
+                continue;
+            }
+            groups.push(SakrylleGroupChoice {
+                id: group.id,
+                name: group.name.clone(),
+                rate_multiplier: group.rate_multiplier.to_string(),
+            });
+        }
+        groups.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+        groups
     }
 
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -69,108 +224,15 @@ impl ChatWidget {
         Some(trimmed.to_string())
     }
 
-    pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
+    pub(crate) fn open_all_models_popup(&mut self, presets: Vec<ModelPreset>) {
         let presets: Vec<ModelPreset> = presets
             .into_iter()
             .filter(|preset| preset.show_in_picker)
             .collect();
 
-        let current_model = self.current_model();
-        let current_label = presets
-            .iter()
-            .find(|preset| preset.model.as_str() == current_model)
-            .map(|preset| preset.model.to_string())
-            .unwrap_or_else(|| self.model_display_name().to_string());
-
-        let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
-            .into_iter()
-            .partition(|preset| Self::is_auto_model(&preset.model));
-
-        if auto_presets.is_empty() {
-            self.open_all_models_popup(other_presets);
-            return;
-        }
-
-        auto_presets.sort_by_key(|preset| Self::auto_model_order(&preset.model));
-        let mut items: Vec<SelectionItem> = auto_presets
-            .into_iter()
-            .map(|preset| {
-                let description =
-                    (!preset.description.is_empty()).then_some(preset.description.clone());
-                let model = preset.model.clone();
-                let should_prompt_plan_mode_scope = self.should_prompt_plan_mode_reasoning_scope(
-                    model.as_str(),
-                    Some(preset.default_reasoning_effort),
-                );
-                let actions = Self::model_selection_actions(
-                    model.clone(),
-                    Some(preset.default_reasoning_effort),
-                    should_prompt_plan_mode_scope,
-                );
-                SelectionItem {
-                    name: model.clone(),
-                    description,
-                    is_current: model.as_str() == current_model,
-                    is_default: preset.is_default,
-                    actions,
-                    dismiss_on_select: true,
-                    ..Default::default()
-                }
-            })
-            .collect();
-
-        if !other_presets.is_empty() {
-            let all_models = other_presets;
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::OpenAllModelsPopup {
-                    models: all_models.clone(),
-                });
-            })];
-
-            let is_current = !items.iter().any(|item| item.is_current);
-            let description = Some(format!(
-                "Choose a specific model and reasoning level (current: {current_label})"
-            ));
-
-            items.push(SelectionItem {
-                name: "All models".to_string(),
-                description,
-                is_current,
-                actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            });
-        }
-
-        let header = self.model_menu_header(
-            "Select Model",
-            "Pick a quick auto mode or browse all models.",
-        );
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            header,
-            ..Default::default()
-        });
-    }
-
-    fn is_auto_model(model: &str) -> bool {
-        model.starts_with("codex-auto-")
-    }
-
-    fn auto_model_order(model: &str) -> usize {
-        match model {
-            "codex-auto-fast" => 0,
-            "codex-auto-balanced" => 1,
-            "codex-auto-thorough" => 2,
-            _ => 3,
-        }
-    }
-
-    pub(crate) fn open_all_models_popup(&mut self, presets: Vec<ModelPreset>) {
         if presets.is_empty() {
             self.add_info_message(
-                "No additional models are available right now.".to_string(),
+                "No models are available right now.".to_string(),
                 /*hint*/ None,
             );
             return;
@@ -181,10 +243,20 @@ impl ChatWidget {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
             let is_current = preset.model.as_str() == self.current_model();
-            let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 let preset_for_event = preset_for_action.clone();
+                if preset_for_event.supported_reasoning_efforts.len() == 1 {
+                    tx.send(AppEvent::UpdateModel(preset_for_event.model.clone()));
+                    tx.send(AppEvent::UpdateReasoningEffort(Some(
+                        preset_for_event.supported_reasoning_efforts[0].effort,
+                    )));
+                    tx.send(AppEvent::PersistModelSelection {
+                        model: preset_for_event.model.clone(),
+                        effort: Some(preset_for_event.supported_reasoning_efforts[0].effort),
+                    });
+                    return;
+                }
                 tx.send(AppEvent::OpenReasoningPopup {
                     model: preset_for_event,
                 });
@@ -195,45 +267,23 @@ impl ChatWidget {
                 is_current,
                 is_default: preset.is_default,
                 actions,
-                dismiss_on_select: single_supported_effort,
-                dismiss_parent_on_child_accept: !single_supported_effort,
+                dismiss_on_select: preset.supported_reasoning_efforts.len() == 1,
+                dismiss_parent_on_child_accept: preset.supported_reasoning_efforts.len() != 1,
                 ..Default::default()
             });
         }
 
         let header = self.model_menu_header(
-            "Select Model and Effort",
-            "Access legacy models by running codex -m <model_name> or in your config.toml",
+            "Select Model",
+            "Choose a model from the current Sakrylle group.",
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(MODEL_SELECTION_VIEW_ID),
             footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
             items,
             header,
             ..Default::default()
         });
-    }
-
-    fn model_selection_actions(
-        model_for_action: String,
-        effort_for_action: Option<ReasoningEffortConfig>,
-        should_prompt_plan_mode_scope: bool,
-    ) -> Vec<SelectionAction> {
-        vec![Box::new(move |tx| {
-            if should_prompt_plan_mode_scope {
-                tx.send(AppEvent::OpenPlanReasoningScopePrompt {
-                    model: model_for_action.clone(),
-                    effort: effort_for_action,
-                });
-                return;
-            }
-
-            tx.send(AppEvent::UpdateModel(model_for_action.clone()));
-            tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
-            tx.send(AppEvent::PersistModelSelection {
-                model: model_for_action.clone(),
-                effort: effort_for_action,
-            });
-        })]
     }
 
     fn should_prompt_plan_mode_reasoning_scope(
@@ -501,6 +551,7 @@ impl ChatWidget {
         ));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(REASONING_SELECTION_VIEW_ID),
             header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,

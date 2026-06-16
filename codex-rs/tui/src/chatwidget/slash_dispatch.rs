@@ -219,6 +219,9 @@ impl ChatWidget {
             SlashCommand::Model => {
                 self.open_model_popup();
             }
+            SlashCommand::Group => {
+                self.open_group_popup();
+            }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
                     return;
@@ -975,6 +978,7 @@ impl ChatWidget {
             | SlashCommand::Compact
             | SlashCommand::Review
             | SlashCommand::Model
+            | SlashCommand::Group
             | SlashCommand::Realtime
             | SlashCommand::Settings
             | SlashCommand::Personality

@@ -54,6 +54,8 @@ async fn models_client_hits_models_endpoint() {
         models: vec![ModelInfo {
             slug: "gpt-test".to_string(),
             display_name: "gpt-test".to_string(),
+            group: None,
+            routing_model: None,
             description: Some("desc".to_string()),
             default_reasoning_level: Some(ReasoningEffort::Medium),
             supported_reasoning_levels: vec![
@@ -117,7 +119,7 @@ async fn models_client_hits_models_endpoint() {
     let client = ModelsClient::new(transport, provider(&base_url), Arc::new(DummyAuth));
 
     let (models, _) = client
-        .list_models("0.1.0", HeaderMap::new())
+        .list_models("0.1.0", HeaderMap::new(), /*include_all_groups*/ false)
         .await
         .expect("models request should succeed");
 

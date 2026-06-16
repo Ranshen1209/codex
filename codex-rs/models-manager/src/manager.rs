@@ -3,7 +3,6 @@ use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
 use crate::model_info;
 use async_trait::async_trait;
-use codex_app_server_protocol::AuthMode;
 use codex_login::AuthManager;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::Result as CoreResult;
@@ -107,7 +106,7 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
 
     /// Build picker-ready presets from the active catalog snapshot.
     fn build_available_models(&self, mut remote_models: Vec<ModelInfo>) -> Vec<ModelPreset> {
-        remote_models.sort_by_key(|model| model.priority);
+        remote_models.sort_by_key(model_sort_key);
 
         let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let uses_codex_backend = self
@@ -423,6 +422,19 @@ fn default_model_from_available(available: Vec<ModelPreset>) -> String {
         .unwrap_or_default()
 }
 
+fn model_sort_key(model: &ModelInfo) -> (i32, i32, i32) {
+    let sakrylle_default_rank = model
+        .group
+        .as_ref()
+        .is_some_and(|group| group.name == "GPT-Pro")
+        && model.display_name == "gpt-5.5";
+    (
+        model.group.is_none() as i32,
+        !sakrylle_default_rank as i32,
+        model.priority,
+    )
+}
+
 fn find_model_by_longest_prefix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
     let mut best: Option<ModelInfo> = None;
     for candidate in candidates {
@@ -460,6 +472,54 @@ fn find_model_by_namespaced_suffix(model: &str, candidates: &[ModelInfo]) -> Opt
     find_model_by_longest_prefix(suffix, candidates)
 }
 
+fn find_grouped_model_by_display_name(
+    model: &str,
+    candidates: &[ModelInfo],
+    config: &ModelsManagerConfig,
+) -> Option<ModelInfo> {
+    if let Some(group_id) = config.sakrylle_default_group_id {
+        let matched = candidates.iter().find(|candidate| {
+            candidate.display_name == model
+                && candidate
+                    .group
+                    .as_ref()
+                    .is_some_and(|group| group.id == group_id)
+        });
+        if let Some(matched) = matched {
+            return Some(matched.clone());
+        }
+    }
+
+    if let Some(group_name) = config.sakrylle_default_group_name.as_deref() {
+        let matched = candidates.iter().find(|candidate| {
+            candidate.display_name == model
+                && candidate
+                    .group
+                    .as_ref()
+                    .is_some_and(|group| group.name == group_name)
+        });
+        if let Some(matched) = matched {
+            return Some(matched.clone());
+        }
+    }
+
+    let matched_gpt_pro = candidates.iter().find(|candidate| {
+        candidate.display_name == model
+            && candidate
+                .group
+                .as_ref()
+                .is_some_and(|group| group.name == "GPT-Pro")
+    });
+    if let Some(matched) = matched_gpt_pro {
+        return Some(matched.clone());
+    }
+
+    candidates
+        .iter()
+        .find(|candidate| candidate.group.is_some() && candidate.display_name == model)
+        .cloned()
+}
+
 pub(crate) fn construct_model_info_from_candidates(
     model: &str,
     candidates: &[ModelInfo],
@@ -468,10 +528,17 @@ pub(crate) fn construct_model_info_from_candidates(
     // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
     // retry for namespaced slugs like `custom/gpt-5.3-codex`.
     let remote = find_model_by_longest_prefix(model, candidates)
-        .or_else(|| find_model_by_namespaced_suffix(model, candidates));
+        .or_else(|| find_model_by_namespaced_suffix(model, candidates))
+        .or_else(|| find_grouped_model_by_display_name(model, candidates, config));
     let model_info = if let Some(remote) = remote {
+        let routing_model = remote
+            .group
+            .as_ref()
+            .map(|_| remote.slug.clone())
+            .or(remote.routing_model.clone());
         ModelInfo {
             slug: model.to_string(),
+            routing_model,
             used_fallback_model_metadata: false,
             ..remote
         }

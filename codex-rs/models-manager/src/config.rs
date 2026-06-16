@@ -9,4 +9,6 @@ pub struct ModelsManagerConfig {
     pub personality_enabled: bool,
     pub model_supports_reasoning_summaries: Option<bool>,
     pub model_catalog: Option<ModelsResponse>,
+    pub sakrylle_default_group_id: Option<u64>,
+    pub sakrylle_default_group_name: Option<String>,
 }

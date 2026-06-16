@@ -219,6 +219,8 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
     ModelInfo {
         slug: slug.to_string(),
         display_name: format!("{slug} display"),
+        group: None,
+        routing_model: None,
         description: Some(format!("{slug} description")),
         default_reasoning_level: Some(ReasoningEffort::Medium),
         supported_reasoning_levels: vec![ReasoningEffortPreset {

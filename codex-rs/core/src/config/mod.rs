@@ -591,6 +591,12 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: Option<String>,
 
+    /// Sakrylle Responses API group id used to route bare model names.
+    pub sakrylle_default_group_id: Option<u64>,
+
+    /// Display name for the configured Sakrylle Responses API group.
+    pub sakrylle_default_group_name: Option<String>,
+
     /// Effective service tier request id preference for new turns.
     /// `default` means the user explicitly selected standard routing.
     pub service_tier: Option<String>,
@@ -1315,6 +1321,8 @@ impl Config {
             personality_enabled: self.features.enabled(Feature::Personality),
             model_supports_reasoning_summaries: self.model_supports_reasoning_summaries,
             model_catalog: self.model_catalog.clone(),
+            sakrylle_default_group_id: self.sakrylle_default_group_id,
+            sakrylle_default_group_name: self.sakrylle_default_group_name.clone(),
         }
     }
 
@@ -3387,6 +3395,8 @@ impl Config {
         let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let config = Self {
             model,
+            sakrylle_default_group_id: cfg.sakrylle_default_group_id,
+            sakrylle_default_group_name: cfg.sakrylle_default_group_name,
             service_tier,
             review_model,
             model_context_window: cfg.model_context_window,

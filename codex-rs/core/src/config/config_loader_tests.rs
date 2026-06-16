@@ -2359,10 +2359,18 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
     let tmp = tempdir()?;
     let home_dir = tmp.path().join("home");
     let codex_home = home_dir.join(".codex");
+    let sakrylle_home = home_dir.join(".sakrylle-cli");
     tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::create_dir_all(&sakrylle_home).await?;
     tokio::fs::write(
         codex_home.join(CONFIG_TOML_FILE),
         r#"foo = "user"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        sakrylle_home.join(CONFIG_TOML_FILE),
+        r#"foo = "sakrylle-user"
 "#,
     )
     .await?;
@@ -2370,7 +2378,7 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
     let cwd = AbsolutePathBuf::from_absolute_path(&home_dir)?;
     let layers = load_config_layers_state(
         LOCAL_FS.as_ref(),
-        &codex_home,
+        &sakrylle_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
@@ -2391,7 +2399,7 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
     assert_eq!(expected, project_layers);
     assert_eq!(
         layers.effective_config().get("foo"),
-        Some(&TomlValue::String("user".to_string()))
+        Some(&TomlValue::String("sakrylle-user".to_string()))
     );
 
     Ok(())

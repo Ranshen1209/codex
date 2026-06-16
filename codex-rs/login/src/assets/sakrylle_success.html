@@ -1,33 +1,34 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="color-scheme" content="light dark" />
-    <title>Signed in to Sakrylle</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Signed in to Sakrylle API</title>
     <style>
       :root {
-        --font-use: "SF Pro", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        --sakrylle-purple: #9181bd;
-        --sakrylle-purple-light: #b8a9d4;
-        --sakrylle-purple-dark: #6b5a96;
-        --gray-0: #ffffff;
-        --gray-50: #f9f9f9;
-        --gray-100: #ededed;
-        --gray-300: #afafaf;
-        --gray-500: #5d5d5d;
-        --gray-900: #181818;
-        --gray-1000: #0d0d0d;
-        --color-background-surface: var(--gray-0);
-        --color-text-foreground: var(--gray-1000);
-        color: var(--color-text-foreground);
-        background: var(--color-background-surface);
+        --font-use: "SF Pro", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --background: #fbfaff;
+        --surface: #ffffff;
+        --border: #e4dfef;
+        --text: #242137;
+        --muted: #6f6887;
+        --accent: #8f82bd;
+        --accent-soft: #f5f3fb;
+        --logo: #ff7383;
+        color: var(--text);
+        background: var(--background);
         font-family: var(--font-use);
       }
 
       @media (prefers-color-scheme: dark) {
         :root {
-          --color-background-surface: var(--gray-900);
-          --color-text-foreground: var(--gray-0);
+          --background: #15131d;
+          --surface: #1e1b29;
+          --border: #383247;
+          --text: #f7f4ff;
+          --muted: #b9b0cf;
+          --accent-soft: #272233;
         }
       }
 
@@ -38,7 +39,7 @@
       body {
         margin: 0;
         min-height: 100vh;
-        background: var(--color-background-surface);
+        background: var(--background);
       }
 
       main {
@@ -46,77 +47,118 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 56px 24px;
+        padding: 48px 24px;
       }
 
-      .content {
-        width: min(100%, 560px);
+      .card {
+        width: min(100%, 620px);
+        min-height: 430px;
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 32px;
+        justify-content: center;
+        gap: 26px;
+        padding: 64px 40px;
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        background: var(--surface);
         text-align: center;
+        box-shadow: 0 18px 48px rgba(104, 91, 150, 0.08);
       }
 
-      .logo-ring {
-        width: 64px;
-        height: 64px;
-        border-radius: 16px;
-        background: linear-gradient(135deg, var(--sakrylle-purple), var(--sakrylle-purple-dark));
+      .product-icon {
+        width: 42px;
+        height: 42px;
+        object-fit: contain;
+      }
+
+      .success-mark {
+        width: 104px;
+        height: 104px;
+        border-radius: 999px;
         display: flex;
         align-items: center;
         justify-content: center;
-        box-shadow: 0 8px 24px rgba(145, 129, 189, 0.3);
+        background: var(--accent-soft);
       }
 
-      .checkmark {
-        width: 32px;
-        height: 32px;
-        color: white;
+      .success-mark svg {
+        width: 46px;
+        height: 46px;
+        color: var(--accent);
+      }
+
+      .copy {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
       }
 
       .title {
         margin: 0;
-        font-size: 24px;
-        font-weight: 600;
-        letter-spacing: -0.5px;
+        color: var(--text);
+        font-size: 28px;
+        font-weight: 700;
+        line-height: 1.25;
       }
 
       .message {
         margin: 0;
-        color: var(--gray-500);
-        font-size: 16px;
-        line-height: 24px;
+        color: var(--muted);
+        font-size: 18px;
+        font-weight: 500;
+        line-height: 1.45;
       }
 
-      .brand {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: var(--sakrylle-purple);
-        font-size: 14px;
-        font-weight: 500;
+      @media (max-width: 640px) {
+        main {
+          align-items: flex-start;
+          padding: 32px 16px;
+        }
+
+        .card {
+          min-height: 360px;
+          gap: 22px;
+          padding: 48px 24px;
+          border-radius: 18px;
+        }
+
+        .success-mark {
+          width: 88px;
+          height: 88px;
+        }
+
+        .success-mark svg {
+          width: 40px;
+          height: 40px;
+        }
+
+        .title {
+          font-size: 24px;
+        }
+
+        .message {
+          font-size: 16px;
+        }
       }
     </style>
   </head>
   <body>
     <main>
-      <div class="content">
-        <div class="logo-ring">
-          <svg class="checkmark" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+      <section class="card" aria-labelledby="title">
+        <img class="product-icon" src="{{PRODUCT_ICON_DATA_URI}}" alt="Sakrylle API" />
+
+        <div class="success-mark" aria-hidden="true">
+          <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5.5 12.5 10 17 19 7" />
           </svg>
         </div>
-        <h1 class="title">You're signed in</h1>
-        <p class="message">You may now close this tab and return to the terminal.</p>
-        <div class="brand">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M8 12l3 3 5-5"/>
-          </svg>
-          <span>Sakrylle</span>
+
+        <div class="copy">
+          <h1 class="title" id="title">登录成功</h1>
+          <p class="message">您已安全登录 Sakrylle API。<br />可以关闭此页面。</p>
         </div>
-      </div>
+      </section>
     </main>
   </body>
 </html>

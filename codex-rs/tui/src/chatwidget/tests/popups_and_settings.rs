@@ -2340,6 +2340,8 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         id: slug.to_string(),
         model: slug.to_string(),
         display_name: slug.to_string(),
+        group: None,
+        routing_model: None,
         description: format!("{slug} description"),
         default_reasoning_effort: ReasoningEffortConfig::Medium,
         supported_reasoning_efforts: vec![ReasoningEffortPreset {
@@ -2358,7 +2360,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         input_modalities: default_input_modalities(),
     };
 
-    chat.open_model_popup_with_presets(vec![
+    chat.open_all_models_popup(vec![
         preset("test-visible-model", true),
         preset("test-hidden-model", false),
     ]);
@@ -2372,6 +2374,123 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         !popup.contains("test-hidden-model"),
         "expected hidden model to be excluded from picker:\n{popup}"
     );
+}
+
+#[tokio::test]
+async fn model_picker_shows_only_current_sakrylle_group_models() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let preset = |id: &str, display_name: &str, group_id: u64, group_name: &str| ModelPreset {
+        id: id.to_string(),
+        model: display_name.to_string(),
+        display_name: display_name.to_string(),
+        group: Some(codex_protocol::openai_models::ModelGroup {
+            id: group_id,
+            name: group_name.to_string(),
+            rate_multiplier: serde_json::Number::from_f64(0.4).expect("finite multiplier"),
+        }),
+        routing_model: Some(id.to_string()),
+        description: format!("{display_name} description"),
+        default_reasoning_effort: ReasoningEffortConfig::Medium,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Medium,
+            description: "medium".to_string(),
+        }],
+        supports_personality: false,
+        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
+        default_service_tier: None,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        availability_nux: None,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+    };
+
+    chat.model_catalog = Arc::new(ModelCatalog::new(vec![
+        preset("3:gpt-5.5", "gpt-5.5", 3, "GPT-Pro-Special"),
+        preset("14:gpt-5.5", "gpt-5.5", 14, "GPT-Pro"),
+        preset("15:claude-sonnet", "claude-sonnet", 15, "Claude"),
+    ]));
+
+    chat.open_model_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("gpt-5.5"),
+        "expected GPT-Pro model in picker:\n{popup}"
+    );
+    assert!(
+        !popup.contains("claude-sonnet"),
+        "expected non-current group model to be excluded:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn group_selection_queues_model_picker_for_selected_group() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let preset = |id: &str, display_name: &str, group_id: u64, group_name: &str| ModelPreset {
+        id: id.to_string(),
+        model: display_name.to_string(),
+        display_name: display_name.to_string(),
+        group: Some(codex_protocol::openai_models::ModelGroup {
+            id: group_id,
+            name: group_name.to_string(),
+            rate_multiplier: serde_json::Number::from_f64(0.4).expect("finite multiplier"),
+        }),
+        routing_model: Some(id.to_string()),
+        description: format!("{display_name} description"),
+        default_reasoning_effort: ReasoningEffortConfig::Medium,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Medium,
+            description: "medium".to_string(),
+        }],
+        supports_personality: false,
+        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
+        default_service_tier: None,
+        is_default: false,
+        upgrade: None,
+        show_in_picker: true,
+        availability_nux: None,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+    };
+
+    chat.model_catalog = Arc::new(ModelCatalog::new(vec![
+        preset("3:gpt-5.5", "gpt-5.5", 3, "GPT-Pro-Special"),
+        preset("14:agnes-2.0-flash", "agnes-2.0-flash", 14, "Agnes-API"),
+    ]));
+    chat.open_group_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistSakrylleGroupSelection {
+            id: _,
+            name: _,
+            open_model_picker: true,
+        })
+    );
+}
+
+#[tokio::test]
+async fn model_selection_views_dismiss_after_persist_success() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_model_popup();
+
+    let preset = get_available_model(&chat, "gpt-5.4");
+    chat.open_reasoning_popup(preset);
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Select Reasoning Level"));
+
+    chat.dismiss_model_selection_views();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(!popup.contains("Select Reasoning Level"));
+    assert!(!popup.contains("Select Model"));
 }
 
 #[tokio::test]
@@ -2565,6 +2684,8 @@ async fn single_reasoning_option_skips_selection() {
         id: "model-with-single-reasoning".to_string(),
         model: "model-with-single-reasoning".to_string(),
         display_name: "model-with-single-reasoning".to_string(),
+        group: None,
+        routing_model: None,
         description: "".to_string(),
         default_reasoning_effort: ReasoningEffortConfig::High,
         supported_reasoning_efforts: single_effort,

@@ -1174,7 +1174,10 @@ async fn load_project_layers(
         let hooks_config_folder_override = trust_context.root_checkout_hooks_folder_for_dir(&dir);
         let dot_codex_normalized =
             normalize_path(dot_codex_abs.as_path()).unwrap_or_else(|_| dot_codex_abs.to_path_buf());
-        if dot_codex_abs == codex_home_abs || dot_codex_normalized == codex_home_normalized {
+        if dot_codex_abs == codex_home_abs
+            || dot_codex_normalized == codex_home_normalized
+            || is_legacy_codex_home_next_to_sakrylle_home(&dot_codex_abs, &codex_home_abs)
+        {
             continue;
         }
         let config_file = dot_codex_abs.join(CONFIG_TOML_FILE);
@@ -1267,6 +1270,20 @@ async fn load_project_layers(
         layers,
         startup_warnings,
     })
+}
+
+fn is_legacy_codex_home_next_to_sakrylle_home(
+    dot_codex_abs: &AbsolutePathBuf,
+    codex_home_abs: &AbsolutePathBuf,
+) -> bool {
+    if codex_home_abs.file_name() != Some(std::ffi::OsStr::new(".sakrylle-cli")) {
+        return false;
+    }
+
+    let Some(parent) = codex_home_abs.parent() else {
+        return false;
+    };
+    dot_codex_abs.as_path() == parent.join(".codex").as_path()
 }
 
 /// For linked worktrees, preserve ordinary worktree-local project config while

@@ -773,7 +773,7 @@ impl AuthModeWidget {
         let prefill_from_env = std::env::var(SAKRYLLE_API_KEY_ENV_VAR)
             .ok()
             .filter(|v| !v.trim().is_empty())
-            .or_else(|| read_openai_api_key_from_env());
+            .or_else(read_openai_api_key_from_env);
         let mut guard = self.sign_in_state.write().unwrap();
         match &mut *guard {
             SignInState::ApiKeyEntry(state) => {

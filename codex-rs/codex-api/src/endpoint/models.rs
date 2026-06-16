@@ -4,11 +4,19 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Verbosity;
+use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::ModelGroup;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::WebSearchToolType;
+use codex_protocol::openai_models::default_input_modalities;
 use http::HeaderMap;
 use http::Method;
 use http::header::ETAG;
+use serde::Deserialize;
 use std::sync::Arc;
 
 pub struct ModelsClient<T: HttpTransport> {
@@ -37,10 +45,16 @@ impl<T: HttpTransport> ModelsClient<T> {
         req.url = format!("{}{}client_version={client_version}", req.url, separator);
     }
 
+    fn append_groups_all_query(req: &mut codex_client::Request) {
+        let separator = if req.url.contains('?') { '&' } else { '?' };
+        req.url = format!("{}{}groups=all", req.url, separator);
+    }
+
     pub async fn list_models(
         &self,
         client_version: &str,
         extra_headers: HeaderMap,
+        include_all_groups: bool,
     ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
         let resp = self
             .session
@@ -50,6 +64,9 @@ impl<T: HttpTransport> ModelsClient<T> {
                 extra_headers,
                 /*body*/ None,
                 |req| {
+                    if include_all_groups {
+                        Self::append_groups_all_query(req);
+                    }
                     Self::append_client_version_query(req, client_version);
                 },
             )
@@ -61,15 +78,84 @@ impl<T: HttpTransport> ModelsClient<T> {
             .and_then(|value| value.to_str().ok())
             .map(ToString::to_string);
 
-        let ModelsResponse { models } = serde_json::from_slice::<ModelsResponse>(&resp.body)
-            .map_err(|e| {
-                ApiError::Stream(format!(
-                    "failed to decode models response: {e}; body: {}",
-                    String::from_utf8_lossy(&resp.body)
-                ))
-            })?;
+        let models = decode_models_response(&resp.body)?;
 
         Ok((models, header_etag))
+    }
+}
+
+fn decode_models_response(body: &[u8]) -> Result<Vec<ModelInfo>, ApiError> {
+    if let Ok(ModelsResponse { models }) = serde_json::from_slice::<ModelsResponse>(body) {
+        return Ok(models);
+    }
+
+    let response = serde_json::from_slice::<OpenAiModelsResponse>(body).map_err(|e| {
+        ApiError::Stream(format!(
+            "failed to decode models response: {e}; body: {}",
+            String::from_utf8_lossy(body)
+        ))
+    })?;
+    Ok(response.data.into_iter().map(Into::into).collect())
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiModelsResponse {
+    data: Vec<OpenAiModelInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiModelInfo {
+    id: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    group: Option<ModelGroup>,
+    #[serde(default)]
+    _allow_image_generation: bool,
+}
+
+impl From<OpenAiModelInfo> for ModelInfo {
+    fn from(model: OpenAiModelInfo) -> Self {
+        let display_name = model.display_name.unwrap_or_else(|| model.id.clone());
+        ModelInfo {
+            slug: model.id,
+            display_name,
+            group: model.group,
+            routing_model: None,
+            description: None,
+            default_reasoning_level: None,
+            supported_reasoning_levels: Vec::new(),
+            shell_type: ConfigShellToolType::ShellCommand,
+            visibility: codex_protocol::openai_models::ModelVisibility::List,
+            supported_in_api: true,
+            priority: 50,
+            additional_speed_tiers: Vec::new(),
+            service_tiers: Vec::new(),
+            default_service_tier: None,
+            availability_nux: None,
+            upgrade: None,
+            base_instructions: String::new(),
+            model_messages: None,
+            supports_reasoning_summaries: false,
+            default_reasoning_summary: ReasoningSummary::Auto,
+            support_verbosity: true,
+            default_verbosity: Some(Verbosity::Low),
+            apply_patch_tool_type: None,
+            web_search_tool_type: WebSearchToolType::Text,
+            truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
+            supports_parallel_tool_calls: true,
+            supports_image_detail_original: false,
+            context_window: None,
+            max_context_window: None,
+            auto_compact_token_limit: None,
+            effective_context_window_percent: 95,
+            experimental_supported_tools: Vec::new(),
+            input_modalities: default_input_modalities(),
+            used_fallback_model_metadata: false,
+            supports_search_tool: false,
+            auto_review_model_override: None,
+            tool_mode: None,
+        }
     }
 }
 
@@ -170,7 +256,11 @@ mod tests {
         );
 
         let (models, _) = client
-            .list_models("0.99.0", HeaderMap::new())
+            .list_models(
+                "0.99.0",
+                HeaderMap::new(),
+                /*include_all_groups*/ false,
+            )
             .await
             .expect("request should succeed");
 
@@ -187,6 +277,43 @@ mod tests {
         assert_eq!(
             url,
             "https://example.com/api/codex/models?client_version=0.99.0"
+        );
+    }
+
+    #[tokio::test]
+    async fn appends_groups_all_query_before_client_version_when_requested() {
+        let response = ModelsResponse { models: Vec::new() };
+
+        let transport = CapturingTransport {
+            last_request: Arc::new(Mutex::new(None)),
+            body: Arc::new(response),
+            etag: None,
+        };
+
+        let client = ModelsClient::new(
+            transport.clone(),
+            provider("https://example.com/api/codex"),
+            Arc::new(DummyAuth),
+        );
+
+        let (models, _) = client
+            .list_models("0.99.0", HeaderMap::new(), /*include_all_groups*/ true)
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(models.len(), 0);
+
+        let url = transport
+            .last_request
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .url
+            .clone();
+        assert_eq!(
+            url,
+            "https://example.com/api/codex/models?groups=all&client_version=0.99.0"
         );
     }
 
@@ -234,7 +361,11 @@ mod tests {
         );
 
         let (models, _) = client
-            .list_models("0.99.0", HeaderMap::new())
+            .list_models(
+                "0.99.0",
+                HeaderMap::new(),
+                /*include_all_groups*/ false,
+            )
             .await
             .expect("request should succeed");
 
@@ -242,6 +373,47 @@ mod tests {
         assert_eq!(models[0].slug, "gpt-test");
         assert_eq!(models[0].supported_in_api, true);
         assert_eq!(models[0].priority, 1);
+    }
+
+    #[test]
+    fn parses_openai_compatible_models_response_with_group_metadata() {
+        let body = json!({
+            "object": "list",
+            "data": [
+                {
+                    "id": "14:gpt-5.5",
+                    "object": "model",
+                    "created": 1704067200,
+                    "owned_by": "openai",
+                    "display_name": "gpt-5.5",
+                    "group": {
+                        "id": 14,
+                        "name": "GPT-Pro",
+                        "rate_multiplier": 0.5
+                    }
+                }
+            ]
+        });
+        let body = serde_json::to_vec(&body).expect("json should serialize");
+
+        let models = decode_models_response(&body).expect("models response should decode");
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].slug, "14:gpt-5.5");
+        assert_eq!(models[0].display_name, "gpt-5.5");
+        assert_eq!(
+            models[0].group,
+            Some(ModelGroup {
+                id: 14,
+                name: "GPT-Pro".to_string(),
+                rate_multiplier: serde_json::Number::from_f64(0.5).expect("finite multiplier"),
+            })
+        );
+        assert_eq!(
+            models[0].visibility,
+            codex_protocol::openai_models::ModelVisibility::List
+        );
+        assert!(models[0].supported_in_api);
     }
 
     #[tokio::test]
@@ -261,7 +433,7 @@ mod tests {
         );
 
         let (models, etag) = client
-            .list_models("0.1.0", HeaderMap::new())
+            .list_models("0.1.0", HeaderMap::new(), /*include_all_groups*/ false)
             .await
             .expect("request should succeed");
 

@@ -329,6 +329,7 @@ mod tests {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            supports_image_generation: true,
         }
     }
 

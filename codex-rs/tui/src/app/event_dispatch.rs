@@ -785,6 +785,40 @@ impl App {
                 self.sync_active_thread_service_tier_to_cached_session()
                     .await;
             }
+            AppEvent::PersistSakrylleGroupSelection {
+                id,
+                name,
+                open_model_picker,
+            } => {
+                self.chat_widget
+                    .set_sakrylle_default_group(id, name.clone());
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    crate::config_update::build_sakrylle_group_selection_edits(id, &name),
+                )
+                .await
+                {
+                    Ok(_) => {
+                        tracing::info!(id, name, "Selected Sakrylle group");
+                        self.chat_widget.add_info_message(
+                            format!("Sakrylle group changed to {name}."),
+                            /*hint*/ None,
+                        );
+                        if open_model_picker {
+                            self.chat_widget.open_model_popup();
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist Sakrylle group selection"
+                        );
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save default Sakrylle group: {err}"
+                        ));
+                    }
+                }
+            }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
                 self.sync_active_thread_personality_setting(app_server, personality)
@@ -808,9 +842,6 @@ impl App {
             AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
                 self.chat_widget
                     .open_plan_reasoning_scope_prompt(model, effort);
-            }
-            AppEvent::OpenAllModelsPopup { models } => {
-                self.chat_widget.open_all_models_popup(models);
             }
             AppEvent::OpenFullAccessConfirmation {
                 preset,
@@ -1313,6 +1344,7 @@ impl App {
                             message.push_str(label);
                         }
                         self.chat_widget.add_info_message(message, /*hint*/ None);
+                        self.chat_widget.dismiss_model_selection_views();
                     }
                     Err(err) => {
                         tracing::error!(

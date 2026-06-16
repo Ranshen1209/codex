@@ -1374,24 +1374,24 @@ async fn run_ratatui_app(
                 draw_prompt(selected, &options);
 
                 loop {
-                    if let Ok(Event::Key(key)) = event::read() {
-                        if key.kind == KeyEventKind::Press {
-                            match key.code {
-                                KeyCode::Up | KeyCode::Char('k') => {
-                                    selected = selected.wrapping_sub(1) % options.len();
-                                }
-                                KeyCode::Down | KeyCode::Char('j') => {
-                                    selected = (selected + 1) % options.len();
-                                }
-                                KeyCode::Enter => break,
-                                KeyCode::Char('q') | KeyCode::Esc => {
-                                    selected = 1;
-                                    break;
-                                }
-                                _ => continue,
+                    if let Ok(Event::Key(key)) = event::read()
+                        && key.kind == KeyEventKind::Press
+                    {
+                        match key.code {
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                selected = selected.wrapping_sub(1) % options.len();
                             }
-                            draw_prompt(selected, &options);
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                selected = (selected + 1) % options.len();
+                            }
+                            KeyCode::Enter => break,
+                            KeyCode::Char('q') | KeyCode::Esc => {
+                                selected = 1;
+                                break;
+                            }
+                            _ => continue,
                         }
+                        draw_prompt(selected, &options);
                     }
                 }
 

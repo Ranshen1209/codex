@@ -17,6 +17,8 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
     ModelInfo {
         slug: preset.id.clone(),
         display_name: preset.display_name.clone(),
+        group: preset.group.clone(),
+        routing_model: preset.routing_model.clone(),
         description: Some(preset.description.clone()),
         default_reasoning_level: Some(preset.default_reasoning_effort),
         supported_reasoning_levels: preset.supported_reasoning_efforts.clone(),
